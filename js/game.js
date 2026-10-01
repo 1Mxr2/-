@@ -397,8 +397,9 @@ function startLevel(idx){
   player.weapons=player.weapons.filter(w=>WEAPONS.some(v=>v.id===w));
   if(!player.weapons.length) player.weapons=['sword'];
   if(player.wi>=player.weapons.length) player.wi=0;
+  game.shake=0; game.flash=0; game.bossBannerT=0;
   game.state='intro'; game.stateT=0;
-  cam.x=clamp(player.x-W*0.35,0,level.w*TILE-W);
+  cam.x=clamp(player.x+player.w/2-W*0.42,0,level.w*TILE-W);
 }
 
 /* ============================================================
@@ -638,7 +639,7 @@ function lobTarget(p){
   const consider=e=>{
     if(!e||e.dying||e.gone) return;
     const ex=e.x+e.w/2, ey=e.y+e.h/2, dx=ex-cx;
-    if(p.face*dx<-18||Math.abs(dx)>300||Math.abs(ey-cy)>150) return;
+    if(p.face*dx<-18||Math.abs(dx)>240||Math.abs(ey-cy)>150) return;
     const score=Math.abs(dx)+Math.abs(ey-cy)*0.7;
     if(score<bestScore){ bestScore=score; best={x:ex,y:ey}; }
   };
@@ -695,7 +696,7 @@ function doAttack(){
       p.castT=0.14;
       game_projs.push({team:'p',x:cx-4,y:cy-4,w:8,h:8,vx,vy,grav:1,
         dmg:w.dmg,aoe:w.aoe,splitCount:w.splitCount||0,splitSpeed:w.splitSpeed||145,
-        life:3.5,spr:w.spr,face:p.face,lob:true});
+        life:2.4,spr:w.spr,face:p.face,lob:true});
     }else{
       let vx=p.face*w.speed, vy=0, sx=cx+p.face*6, sy=cy;
       if(p.aim==='up'){ vx=0; vy=-w.speed; sx=cx-3; sy=p.y-12; }
@@ -787,17 +788,11 @@ function respawnToSafe(withVel){
 
 function afterDeath(){
   game.lives--;
-  if(game.lives<0){ game.state='gameover'; game.stateT=0; return; }
-  // 重置玩家与战场
-  const p=player;
-  p.dead=false; p.hearts=p.maxHearts; p.fx={}; p.inv=1.5; p.shield=0;
-  p.lavaCd=0; p.spikeCd=0;
-  p.x=p.spawn.x; p.y=p.spawn.y; p.vx=0; p.vy=0;
-  game_projs.length=0; hazards.length=0;
-  const b=level.boss;
-  if(b&&!b.dying){ b.hp=b.maxhp; b.active=false; b.state='idle'; b.stT=0; level.bossActive=false; }
-  toast('剩余生命 × '+Math.max(0,game.lives),'#d84040');
-  game.state='play';
+  if(game.lives<=0){ game.state='gameover'; game.stateT=0; return; }
+  // 掉命后从本章起点重新挑战，完整刷新敌人、Boss、投射物和地形状态。
+  startLevel(game.lv);
+  game.state='play'; game.stateT=0;
+  toast('本章重新开始 · 剩余生命 × '+game.lives,'#d84040');
 }
 
 function levelClear(){
@@ -1770,8 +1765,9 @@ function update(dt){
   updateProjs(dt);
 
   // 摄像机
-  const targetX=clamp(player.x+player.w/2-W*0.38+player.face*24,0,level.w*TILE-W);
-  cam.x=lerp(cam.x,targetX,0.12);
+  // 镜头只跟随玩家位置，不再因为朝向切换左右跳动。
+  const targetX=clamp(player.x+player.w/2-W*0.42,0,level.w*TILE-W);
+  cam.x=lerp(cam.x,targetX,0.16);
 }
 
 function grantBuff(npc){
@@ -1994,7 +1990,7 @@ function drawWorld(){
   // 世界层：应用摄像机偏移（取整防止像素接缝）+ 震屏
   CTX.save();
   CTX.translate(-Math.round(cam.x),0);
-  if(game.shake>0) CTX.translate(rand(-game.shake,game.shake),rand(-game.shake,game.shake));
+  if(game.shake>0) CTX.translate(rand(-game.shake*0.35,game.shake*0.35),rand(-game.shake,game.shake));
 
   drawTiles();
   drawGate();

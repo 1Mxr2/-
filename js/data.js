@@ -27,12 +27,12 @@ function buildMap(w,h,fn){
 
 // ---------- 武器 ----------
 const WEAPONS=[
-  {id:'sword',     name:'青铜剑',   slot:1, cd:0.34, kind:'melee', dmg:2, range:22},
-  {id:'flysword',  name:'飞剑',     slot:2, cd:0.55, kind:'proj',  dmg:1, speed:255, spr:'p_flysword', pw:12, ph:4},
-  {id:'bow',       name:'圣光弩',   slot:3, cd:0.22, kind:'proj',  dmg:1, speed:335, spr:'p_arrow', pw:8, ph:3},
-  {id:'talisman',  name:'雷火符',   slot:4, cd:0.90, kind:'lob',   dmg:2, aoe:66, splitCount:6, splitSpeed:152, lvx:235, lvy:-130, spr:'p_talisman', pw:8, ph:8},
-  {id:'thunder',   name:'雷霆之刃', slot:5, cd:0.50, kind:'melee', dmg:2, range:20, elem:'thunder', spr:'wicon_thunder'},
-  {id:'flameblade',name:'炎狱双刃', slot:6, cd:0.32, kind:'melee', dmg:2, range:24, elem:'fire', spr:'wicon_flame'},
+  {id:'sword',     name:'青铜剑',   slot:1, cd:0.38, kind:'melee', dmg:3, range:24},
+  {id:'flysword',  name:'飞剑',     slot:2, cd:0.58, kind:'proj',  dmg:2, speed:255, spr:'p_flysword', pw:12, ph:4},
+  {id:'bow',       name:'圣光弩',   slot:3, cd:0.24, kind:'proj',  dmg:1, speed:335, spr:'p_arrow', pw:8, ph:3},
+  {id:'talisman',  name:'雷火符',   slot:4, cd:0.95, kind:'lob',   dmg:1, aoe:44, splitCount:4, splitSpeed:128, lvx:190, lvy:-120, spr:'p_talisman', pw:8, ph:8},
+  {id:'thunder',   name:'雷霆之刃', slot:5, cd:0.60, kind:'melee', dmg:4, range:22, elem:'thunder', spr:'wicon_thunder'},
+  {id:'flameblade',name:'炎狱双刃', slot:6, cd:0.40, kind:'melee', dmg:3, range:26, elem:'fire', spr:'wicon_flame'},
 ];
 
 // ---------- 敌人图鉴 ----------

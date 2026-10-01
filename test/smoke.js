@@ -39,7 +39,7 @@ const code=['js/sprites.js','js/data.js','js/game.js']
 const expose=new Function('window','document','requestAnimationFrame','performance', code+`
 ;return {game,player,get level(){return level;},cam,LEVELS,WEAPONS,NPC_TYPES,ENEMY_TYPES,BOSSES,
  startLevel,buildLevel,update,game_projs,hazards,particles,damageEnemy,applyEffect,
- resetRun,grantBuff,updateProjs,updateEnemy,updateBoss,hurtPlayer,levelClear,frame};`);
+ resetRun,grantBuff,updateProjs,updateEnemy,updateBoss,hurtPlayer,levelClear,explodeTalisman,frame};`);
 const G=expose(global.window,global.document,global.requestAnimationFrame,global.performance);
 
 function press(codeStr){ kds.forEach(f=>f({code:codeStr,preventDefault(){},repeat:false})); }
@@ -163,7 +163,7 @@ const pressOnce=(c)=>{ press(c); };
 
   // 5.5 方向攻击（独立干净实例，避免前序章节的输入状态污染）
   {
-    const G2=new Function('window','document',code+`;return {game,player,get level(){return level},startLevel,frame,get game_projs(){return game_projs}};`)(global.window,global.document);
+    const G2=new Function('window','document',code+`;return {game,player,get level(){return level},startLevel,update,cam,frame,get game_projs(){return game_projs}};`)(global.window,global.document);
     const run2=n=>{for(let i=0;i<n;i++){ts+=16.7;G2.frame(ts);}};
     G2.startLevel(0); run2(3);
     pressOnce('Enter'); run2(2); release('Enter');
@@ -178,8 +178,20 @@ const pressOnce=(c)=>{ press(c); };
     press('ArrowDown'); press('KeyJ'); run2(1); release('KeyJ'); release('ArrowDown');
     const dnPr=G2.game_projs.find(pr=>pr.team==='p'&&pr.vy>0);
     check('空中↓+J 可向下射击', !!dnPr&&dnPr.vy>0&&Math.abs(dnPr.vx)<1, dnPr?('vy='+dnPr.vy.toFixed(0)):'无投射物');
+    G2.game.state='play'; G2.player.x=300; G2.player.y=100; G2.player.vx=0; G2.player.vy=0; G2.player.face=1;
+    for(let i=0;i<60;i++) G2.update(1/60);
+    const camRight=G2.cam.x;
+    G2.player.face=-1; G2.update(1/60); const camLeft=G2.cam.x;
+    check('镜头不随角色朝向左右跳动', Math.abs(camRight-camLeft)<0.01, 'right='+camRight+' left='+camLeft);
     G2.game_projs.length=0;
   }
+
+  // 5.6 雷火符：落地、撞墙、超时都统一在当前位置分裂为四个小球
+  const bomb=G.WEAPONS.find(w=>w.id==='talisman');
+  check('雷火符范围与伤害已下调', bomb.dmg===1&&bomb.aoe===44, JSON.stringify({dmg:bomb.dmg,aoe:bomb.aoe}));
+  G.game_projs.length=0;
+  G.explodeTalisman({x:120,y:120,w:8,h:8,dmg:bomb.dmg,aoe:bomb.aoe,splitCount:bomb.splitCount,splitSpeed:bomb.splitSpeed});
+  check('雷火符固定分裂四个小球', G.game_projs.filter(pr=>pr.splitShot).length===4, 'count='+G.game_projs.length);
 
   // 6. 死亡与重生
   G.game.god=false;
@@ -195,10 +207,13 @@ const pressOnce=(c)=>{ press(c); };
   check('三心打完进入死亡', G.player.dead===true);
   ts=runFrames(120,ts);
   check('死亡后消耗一条命并重生', G.player.dead===false&&G.game.lives===1, 'lives='+G.game.lives);
+  check('掉命后章节从起点重新开始', G.player.x===G.level.spawn.x&&Math.abs(G.player.y-G.level.spawn.y)<1.5, JSON.stringify({x:G.player.x,y:G.player.y,spawn:G.level.spawn}));
+  check('掉命后玩家满血且敌人重新刷新', G.player.hearts===G.player.maxHearts&&G.level.enemies.length===G.buildLevel(0).enemies.length, JSON.stringify({hearts:G.player.hearts,enemies:G.level.enemies.length}));
+  check('掉命后Boss血量重置', G.level.boss.hp===G.level.boss.maxhp&&G.level.boss.active===false, JSON.stringify({hp:G.level.boss.hp,maxhp:G.level.boss.maxhp}));
   G.game.lives=0; G.player.shield=0; G.player.inv=0; G.player.hearts=1; G.hurtPlayer(1,{}); ts=runFrames(120,ts);
   check('命尽进入 gameover', G.game.state==='gameover');
   pressOnce('Enter'); ts=runFrames(2,ts); release('Enter');
-  check('gameover 回车重开本关', G.game.state==='intro'||G.game.state==='play');
+  check('gameover 回车重开本关', (G.game.state==='intro'||G.game.state==='play')&&G.game.lives===3, 'state='+G.game.state+' lives='+G.game.lives);
 
   // 7. 地图结构校验：出生点安全 / 门存在 / Boss 存在
   for(let lv=0;lv<G.LEVELS.length;lv++){
