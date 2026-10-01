@@ -180,8 +180,8 @@ const pressOnce=(c)=>{ press(c); };
     check('空中↓+J 可向下射击', !!dnPr&&dnPr.vy>0&&Math.abs(dnPr.vx)<1, dnPr?('vy='+dnPr.vy.toFixed(0)):'无投射物');
     G2.game.state='play'; G2.player.x=300; G2.player.y=100; G2.player.vx=0; G2.player.vy=0; G2.player.face=1;
     for(let i=0;i<60;i++) G2.update(1/60);
-    const camRight=G2.cam.x;
-    G2.player.face=-1; G2.update(1/60); const camLeft=G2.cam.x;
+    G2.player.x=300; G2.player.vx=0; G2.update(1/60); const camRight=G2.cam.x;
+    G2.player.face=-1; G2.player.x=300; G2.player.vx=0; G2.update(1/60); const camLeft=G2.cam.x;
     check('镜头不随角色朝向左右跳动', Math.abs(camRight-camLeft)<0.01, 'right='+camRight+' left='+camLeft);
     G2.game_projs.length=0;
   }
@@ -199,6 +199,14 @@ const pressOnce=(c)=>{ press(c); };
   pressOnce('Enter'); ts=runFrames(2,ts); release('Enter');
   G.game.lives=2; G.player.shield=0; delete G.player.fx.invincible;
   G.player.hearts=3; // 与默认初始一致（此前测试可能吃过心之容器）
+  const levelBeforeDeath=G.level, bossBeforeDeath=G.level.boss;
+  const checkpoint={x:G.player.x,y:G.player.y};
+  G.player.spawn={x:checkpoint.x,y:checkpoint.y};
+  G.player.safeT=999;
+  G.player.x=checkpoint.x+64; G.player.y=checkpoint.y;
+  bossBeforeDeath.active=true; G.level.bossActive=true;
+  bossBeforeDeath.hp=Math.max(1,bossBeforeDeath.maxhp-1);
+  const bossHpBeforeDeath=bossBeforeDeath.hp;
   for(let i=0;i<3;i++){
     G.player.inv=0;
     G.hurtPlayer(1,{});
@@ -207,13 +215,13 @@ const pressOnce=(c)=>{ press(c); };
   check('三心打完进入死亡', G.player.dead===true);
   ts=runFrames(120,ts);
   check('死亡后消耗一条命并重生', G.player.dead===false&&G.game.lives===1, 'lives='+G.game.lives);
-  check('掉命后章节从起点重新开始', G.player.x===G.level.spawn.x&&Math.abs(G.player.y-G.level.spawn.y)<1.5, JSON.stringify({x:G.player.x,y:G.player.y,spawn:G.level.spawn}));
-  check('掉命后玩家满血且敌人重新刷新', G.player.hearts===G.player.maxHearts&&G.level.enemies.length===G.buildLevel(0).enemies.length, JSON.stringify({hearts:G.player.hearts,enemies:G.level.enemies.length}));
-  check('掉命后Boss血量重置', G.level.boss.hp===G.level.boss.maxhp&&G.level.boss.active===false, JSON.stringify({hp:G.level.boss.hp,maxhp:G.level.boss.maxhp}));
-  G.game.lives=0; G.player.shield=0; G.player.inv=0; G.player.hearts=1; G.hurtPlayer(1,{}); ts=runFrames(120,ts);
+  check('一条命没了回到最近检查点', G.level===levelBeforeDeath&&G.player.x===checkpoint.x&&Math.abs(G.player.y-checkpoint.y)<1.5, JSON.stringify({x:G.player.x,y:G.player.y,checkpoint}));
+  check('单条命复活后满血且保留战场', G.player.hearts===G.player.maxHearts&&G.level.boss===bossBeforeDeath&&G.level.boss.hp===bossHpBeforeDeath, JSON.stringify({hearts:G.player.hearts,bossHp:G.level.boss.hp}));
+  const failedLevel=G.level;
+  G.game.lives=1; G.player.shield=0; G.player.inv=0; G.player.hearts=1; G.hurtPlayer(1,{}); ts=runFrames(120,ts);
   check('命尽进入 gameover', G.game.state==='gameover');
   pressOnce('Enter'); ts=runFrames(2,ts); release('Enter');
-  check('gameover 回车重开本关', (G.game.state==='intro'||G.game.state==='play')&&G.game.lives===3, 'state='+G.game.state+' lives='+G.game.lives);
+  check('命尽后回车从章节出生点重开', (G.game.state==='intro'||G.game.state==='play')&&G.game.lives===3&&G.level!==failedLevel&&G.player.x===G.level.spawn.x, 'state='+G.game.state+' lives='+G.game.lives);
 
   // 7. 地图结构校验：出生点安全 / 门存在 / Boss 存在
   for(let lv=0;lv<G.LEVELS.length;lv++){

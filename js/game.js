@@ -789,10 +789,14 @@ function respawnToSafe(withVel){
 function afterDeath(){
   game.lives--;
   if(game.lives<=0){ game.state='gameover'; game.stateT=0; return; }
-  // 掉命后从本章起点重新挑战，完整刷新敌人、Boss、投射物和地形状态。
-  startLevel(game.lv);
+  // 单条命用尽时回到最近检查点，保留当前章节、敌人和 Boss 的战斗进度。
+  const p=player;
+  p.dead=false; p.hearts=p.maxHearts; p.fx={}; p.inv=1.5; p.shield=0;
+  p.lavaCd=0; p.spikeCd=0; p.cd=0; p.atkT=0; p.castT=0; p.atkBuf=0; p.swingHit=new Set(); p.aim='fwd';
+  p.x=p.spawn.x; p.y=p.spawn.y; p.vx=0; p.vy=0;
+  game_projs.length=0; hazards.length=0;
+  toast('回到检查点 · 剩余生命 × '+game.lives,'#d84040');
   game.state='play'; game.stateT=0;
-  toast('本章重新开始 · 剩余生命 × '+game.lives,'#d84040');
 }
 
 function levelClear(){
