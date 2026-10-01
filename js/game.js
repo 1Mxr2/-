@@ -9,7 +9,7 @@ CTX.imageSmoothingEnabled=false;
 const W=480, H=270, TILE=16;
 const RS=2;                       // 渲染倍率：960x540 背板，文字与描边更清晰
 const GRAV=830;
-const SPEED_SKILL={max:100,fillTime:6,duration:3,cooldown:6,multiplier:1.75};
+const SPEED_SKILL={max:100,fillTime:6,duration:3,cooldown:6,multiplier:1.3};
 
 // 整数倍缩放适配窗口（保证像素锐利）
 function fitCanvas(){
@@ -2558,13 +2558,13 @@ function drawHUD(){
   CTX.fillStyle='#f8f8f8'; CTX.font='bold 9px "Microsoft YaHei",sans-serif'; CTX.textAlign='left';
   CTX.fillText('×'+Math.max(0,game.lives),W-32,14);
   // 神行技能条：满条按 L 加速 3 秒，冷却 6 秒后再次可用
-  const skillW=104, skillX=W/2-skillW/2, skillY=31, skillRatio=clamp(p.skillCharge/SPEED_SKILL.max,0,1);
-  CTX.fillStyle='rgba(8,8,18,0.78)'; CTX.fillRect(skillX-2,skillY-2,skillW+4,11);
-  CTX.fillStyle='#28243a'; CTX.fillRect(skillX,skillY,skillW,5);
+  const skillW=28, skillX=5, skillY=24, skillRatio=clamp(p.skillCharge/SPEED_SKILL.max,0,1);
+  CTX.fillStyle='rgba(8,8,18,0.78)'; CTX.fillRect(skillX-1,skillY-1,skillW+2,9);
+  CTX.fillStyle='#28243a'; CTX.fillRect(skillX,skillY,skillW,4);
   CTX.fillStyle=p.skillT>0?'#7fdce8':(p.skillCd>0?'#9a4fd8':(skillRatio>=1?'#f8d838':'#c89820'));
-  CTX.fillRect(skillX,skillY,skillW*skillRatio,5);
-  const skillText=p.skillT>0?'L 加速中 '+Math.ceil(p.skillT)+'s':p.skillCd>0?'L 冷却 '+Math.ceil(p.skillCd)+'s':skillRatio>=1?'L 可用':'L 充能 '+Math.floor(skillRatio*100)+'%';
-  txt(skillText,W/2,44,p.skillT>0?'#7fdce8':(skillRatio>=1&&p.skillCd<=0?'#f8d838':'#c0c0d0'),7,'center',true);
+  CTX.fillRect(skillX,skillY,skillW*skillRatio,4);
+  const skillText=p.skillT>0?'L '+Math.ceil(p.skillT)+'s':p.skillCd>0?'冷却 '+Math.ceil(p.skillCd)+'s':skillRatio>=1?'L 可用':Math.floor(skillRatio*100)+'%';
+  txt(skillText,skillX+skillW/2,skillY+12,p.skillT>0?'#7fdce8':(skillRatio>=1&&p.skillCd<=0?'#f8d838':'#c0c0d0'),5,'center',true);
   // 无敌模式标识
   if(game.god){
     CTX.fillStyle='rgba(248,216,56,0.18)'; CTX.fillRect(W-56,20,52,11);
