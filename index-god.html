@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<title>神魔远征 · 无敌版</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#05050c;overflow:hidden}
+  body{display:flex;align-items:center;justify-content:center}
+  #wrap{position:relative;width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;image-rendering:crisp-edges;image-rendering:pixelated;background:#000}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="960" height="540"></canvas></div>
+<script>window.GOD_MODE=true;window.DMG_MULT=5;</script>
+<script src="js/sprites.js?v=23"></script>
+<script src="js/data.js?v=23"></script>
+<script src="js/game.js?v=23"></script>
+</body>
+</html>
