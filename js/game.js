@@ -9,6 +9,7 @@ CTX.imageSmoothingEnabled=false;
 const W=480, H=270, TILE=16;
 const RS=2;                       // 渲染倍率：960x540 背板，文字与描边更清晰
 const GRAV=830;
+const SPEED_SKILL={max:100,fillTime:6,duration:3,cooldown:6,multiplier:1.75};
 
 // 整数倍缩放适配窗口（保证像素锐利）
 function fitCanvas(){
@@ -190,12 +191,13 @@ const HELP_ROWS=[
   ['空中按住 ↓ / S','向下攻击 · 向下射击'],
   ['Q  /  1 - 6','切换已获得的神兵'],
   ['E','与神仙妖怪交谈，领取加护'],
+  ['L','技能条满时加速 3 秒，冷却 6 秒'],
   ['P  /  Esc','暂停 · 打开设置'],
   ['M','静音开关'],
   ['F8  /  F9','跳关 · 无敌（调试用）'],
 ];
 function drawHelpPanel(){
-  const pw=376, ph=216, px=W/2-pw/2, py=H/2-ph/2;
+  const pw=376, ph=232, px=W/2-pw/2, py=H/2-ph/2;
   CTX.fillStyle='rgba(8,8,18,0.94)'; CTX.fillRect(px,py,pw,ph);
   CTX.strokeStyle='#c89820'; CTX.lineWidth=1; CTX.strokeRect(px+0.5,py+0.5,pw-1,ph-1);
   CTX.fillStyle='rgba(248,216,56,0.10)'; CTX.fillRect(px+1,py+1,pw-2,20);
@@ -320,6 +322,7 @@ const player={
   onGround:false, coyote:0, jbuf:0, jumps:0,
   atkT:0, castT:0, atkBuf:0, swing:0, swingHit:null, aim:'fwd',
   dead:false, deadT:0, anim:0, spawn:{x:0,y:0}, safeT:0,
+  skillCharge:SPEED_SKILL.max, skillT:0, skillCd:0,
 };
 
 /* ============================================================
@@ -393,6 +396,7 @@ function startLevel(idx){
   player.fx={}; player.inv=1; player.dead=false; player.shield=0;
   player.cd=0; player.atkT=0; player.castT=0; player.atkBuf=0; player.swingHit=new Set(); player.aim='fwd';
   player.coyote=0; player.jbuf=0; player.jumps=0; player.safeT=0; player.lavaCd=0; player.spikeCd=0;
+  player.skillCharge=SPEED_SKILL.max; player.skillT=0; player.skillCd=0;
   player.spawn={x:player.x,y:player.y};
   player.weapons=player.weapons.filter(w=>WEAPONS.some(v=>v.id===w));
   if(!player.weapons.length) player.weapons=['sword'];
@@ -488,6 +492,23 @@ function toast(text,color){ toasts.push({text,color:color||'#ffe8a0',t:2.6}); }
  * ============================================================ */
 function curWeapon(){ return WEAPONS.find(w=>w.id===player.weapons[player.wi])||WEAPONS[0]; }
 
+function updateSpeedSkill(dt){
+  const p=player;
+  if(p.dead) return;
+  p.skillT=Math.max(0,p.skillT-dt);
+  p.skillCd=Math.max(0,p.skillCd-dt);
+  p.skillCharge=Math.min(SPEED_SKILL.max,p.skillCharge+dt*SPEED_SKILL.max/SPEED_SKILL.fillTime);
+}
+
+function activateSpeedSkill(){
+  const p=player;
+  if(p.dead||game.state!=='play'||p.skillT>0||p.skillCd>0||p.skillCharge<SPEED_SKILL.max) return false;
+  p.skillCharge=0; p.skillT=SPEED_SKILL.duration; p.skillCd=SPEED_SKILL.cooldown;
+  SFX.buff(); toast('神行加速！','#7fdce8');
+  burst(p.x+p.w/2,p.y+p.h/2,'#7fdce8',14,100,0.55);
+  return true;
+}
+
 function updatePlayer(dt){
   const p=player;
   if(p.dead){
@@ -502,7 +523,8 @@ function updatePlayer(dt){
   if(down('ArrowRight','KeyD')) mx++;
   if(mx!==0) p.face=mx;
   const slowMul=p.fx.slow?0.55:1;
-  const spdMul=(p.fx.speed?1.5:1)*slowMul;
+  const skillMul=p.skillT>0?SPEED_SKILL.multiplier:1;
+  const spdMul=(p.fx.speed?1.5:1)*skillMul*slowMul;
   const target=mx*95*spdMul;
   p.vx=lerp(p.vx,target, p.onGround?0.4:0.18);
   if(Math.abs(p.vx)<3&&mx===0) p.vx=0;
@@ -793,6 +815,7 @@ function afterDeath(){
   const p=player;
   p.dead=false; p.hearts=p.maxHearts; p.fx={}; p.inv=1.5; p.shield=0;
   p.lavaCd=0; p.spikeCd=0; p.cd=0; p.atkT=0; p.castT=0; p.atkBuf=0; p.swingHit=new Set(); p.aim='fwd';
+  p.skillCharge=SPEED_SKILL.max; p.skillT=0; p.skillCd=0;
   p.x=p.spawn.x; p.y=p.spawn.y; p.vx=0; p.vy=0;
   game_projs.length=0; hazards.length=0;
   toast('回到检查点 · 剩余生命 × '+game.lives,'#d84040');
@@ -1752,6 +1775,8 @@ function update(dt){
 
   if(hit('KeyP')){ game.settingsOpen=true; game.paused=true; SET_SEL=0; SFX.check(); return; }
   if(hit('KeyM')){ muted=!muted; toast(muted?'已静音':'声音开启','#c0c0d0'); }
+  updateSpeedSkill(dt);
+  if(hit('KeyL')) activateSpeedSkill();
   if(hit('F9')&&game.mode==='coward'){
     game.god=!game.god; SET.god=game.god?1:-1; saveSet(); toast(game.god?'无敌模式 开':'无敌模式 关','#9a4fd8');
   }
@@ -1791,6 +1816,7 @@ function grantBuff(npc){
 function resetRun(){
   game.lives=3; game.deaths=0; game.playTime=0;
   player.maxHearts=3; player.hearts=3; player.shield=0;
+  player.skillCharge=SPEED_SKILL.max; player.skillT=0; player.skillCd=0;
   player.weapons=['sword']; player.wi=0;
 }
 
@@ -2531,6 +2557,14 @@ function drawHUD(){
   CTX.drawImage(SPR.ui_live,W-40,5);
   CTX.fillStyle='#f8f8f8'; CTX.font='bold 9px "Microsoft YaHei",sans-serif'; CTX.textAlign='left';
   CTX.fillText('×'+Math.max(0,game.lives),W-32,14);
+  // 神行技能条：满条按 L 加速 3 秒，冷却 6 秒后再次可用
+  const skillW=104, skillX=W/2-skillW/2, skillY=31, skillRatio=clamp(p.skillCharge/SPEED_SKILL.max,0,1);
+  CTX.fillStyle='rgba(8,8,18,0.78)'; CTX.fillRect(skillX-2,skillY-2,skillW+4,11);
+  CTX.fillStyle='#28243a'; CTX.fillRect(skillX,skillY,skillW,5);
+  CTX.fillStyle=p.skillT>0?'#7fdce8':(p.skillCd>0?'#9a4fd8':(skillRatio>=1?'#f8d838':'#c89820'));
+  CTX.fillRect(skillX,skillY,skillW*skillRatio,5);
+  const skillText=p.skillT>0?'L 加速中 '+Math.ceil(p.skillT)+'s':p.skillCd>0?'L 冷却 '+Math.ceil(p.skillCd)+'s':skillRatio>=1?'L 可用':'L 充能 '+Math.floor(skillRatio*100)+'%';
+  txt(skillText,W/2,44,p.skillT>0?'#7fdce8':(skillRatio>=1&&p.skillCd<=0?'#f8d838':'#c0c0d0'),7,'center',true);
   // 无敌模式标识
   if(game.god){
     CTX.fillStyle='rgba(248,216,56,0.18)'; CTX.fillRect(W-56,20,52,11);
@@ -2895,7 +2929,7 @@ function drawTitle(){
   // 操作说明（底部半透明条）
   CTX.fillStyle='rgba(8,6,16,0.6)'; CTX.fillRect(0,252,W,18);
   CTX.fillStyle='rgba(200,200,215,0.9)'; CTX.font='8px "Microsoft YaHei",sans-serif';
-  CTX.fillText('←→ 移动  空格 跳跃  J 攻击  ↑+J 上打  空中↓+J 下打  E 交谈  Q 换武器  H 操作说明',W/2,262);
+  CTX.fillText('←→ 移动  空格 跳跃  J 攻击  L 加速  E 交谈  Q 换武器  H 操作说明',W/2,262);
 }
 
 function drawGameover(){

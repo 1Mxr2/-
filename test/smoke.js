@@ -39,7 +39,8 @@ const code=['js/sprites.js','js/data.js','js/game.js']
 const expose=new Function('window','document','requestAnimationFrame','performance', code+`
 ;return {game,player,get level(){return level;},cam,LEVELS,WEAPONS,NPC_TYPES,ENEMY_TYPES,BOSSES,
  startLevel,buildLevel,update,game_projs,hazards,particles,damageEnemy,applyEffect,
- resetRun,grantBuff,updateProjs,updateEnemy,updateBoss,hurtPlayer,levelClear,explodeTalisman,frame};`);
+ resetRun,grantBuff,updateProjs,updateEnemy,updateBoss,hurtPlayer,levelClear,explodeTalisman,
+ updateSpeedSkill,activateSpeedSkill,frame};`);
 const G=expose(global.window,global.document,global.requestAnimationFrame,global.performance);
 
 function press(codeStr){ kds.forEach(f=>f({code:codeStr,preventDefault(){},repeat:false})); }
@@ -192,6 +193,15 @@ const pressOnce=(c)=>{ press(c); };
   G.game_projs.length=0;
   G.explodeTalisman({x:120,y:120,w:8,h:8,dmg:bomb.dmg,aoe:bomb.aoe,splitCount:bomb.splitCount,splitSpeed:bomb.splitSpeed});
   check('雷火符固定分裂四个小球', G.game_projs.filter(pr=>pr.splitShot).length===4, 'count='+G.game_projs.length);
+
+  // 5.7 神行技能：满条按 L 加速三秒，六秒冷却后恢复可用
+  G.game.state='play';
+  G.player.skillCharge=100; G.player.skillT=0; G.player.skillCd=0;
+  check('神行技能满条可激活', G.activateSpeedSkill()===true&&G.player.skillT===3&&G.player.skillCd===6);
+  G.updateSpeedSkill(3.1);
+  check('神行技能持续三秒后结束', G.player.skillT===0&&G.player.skillCd>2.8&&G.player.skillCd<3);
+  G.updateSpeedSkill(2.9);
+  check('神行技能六秒冷却后充满', G.player.skillCd===0&&G.player.skillCharge===100);
 
   // 6. 死亡与重生
   G.game.god=false;
