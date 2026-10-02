@@ -3,7 +3,7 @@
  * data.js — 武器 / 敌人 / 神仙 / 关卡数据
  * 图块字符: '.'空 '#'实体 '='单向平台 '^'尖刺 '~'岩浆
  * 实体字符: P玩家 G门 Z Boss F存档点 H心 M心之容器
- *           f飞剑 b圣光弩 t雷火符
+ *           f飞剑 b圣光弩
  *           A回春 B疾风 C神佑 D忘忧 E金刚
  *           1小恶魔 2石像鬼 3骷髅弓手 4地狱犬 5天兵
  *           6鬼火 7牛头 8马面 9蜘蛛妖 0堕落天使 i冰霜妖灵
@@ -30,7 +30,6 @@ const WEAPONS=[
   {id:'sword',     name:'青铜剑',   slot:1, cd:0.38, kind:'melee', dmg:3, range:24},
   {id:'flysword',  name:'飞剑',     slot:2, cd:0.58, kind:'proj',  dmg:2, speed:255, spr:'p_flysword', pw:12, ph:4},
   {id:'bow',       name:'圣光弩',   slot:3, cd:0.24, kind:'proj',  dmg:1, speed:335, spr:'p_arrow', pw:8, ph:3},
-  {id:'talisman',  name:'雷火符',   slot:4, cd:0.95, kind:'lob',   dmg:1, aoe:44, splitCount:4, splitSpeed:128, lvx:190, lvy:-120, spr:'p_talisman', pw:8, ph:8},
   {id:'thunder',   name:'雷霆之刃', slot:5, cd:0.60, kind:'melee', dmg:4, range:22, elem:'thunder', spr:'wicon_thunder'},
   {id:'flameblade',name:'炎狱双刃', slot:6, cd:0.40, kind:'melee', dmg:3, range:26, elem:'fire', spr:'wicon_flame'},
 ];
@@ -40,12 +39,12 @@ const ENEMY_TYPES={
   '1':{name:'小恶魔',   hp:2, w:12,h:11, behavior:'jumper',  speed:42, contact:1, proj:'fire',  projCd:2.6, spr:'e_imp'},
   '2':{name:'石像鬼',   hp:3, w:14,h:12, behavior:'diver',   contact:1, spr:'e_gargoyle'},
   '3':{name:'骷髅弓手', hp:2, w:12,h:13, behavior:'shooter', proj:'arrow', projCd:1.9, range:175, spr:'e_skeleton', w2:12,h2:13},
-  '4':{name:'地狱犬',   hp:3, w:15,h:10, behavior:'chaser',  speed:88, contact:1, effect:'burn', spr:'e_hound'},
+  '4':{name:'地狱犬',   hp:3, w:15,h:10, behavior:'chaser',  speed:88, contact:1, effect:'burn', skill:'pounce', skillCd:3.2, spr:'e_hound'},
   '5':{name:'天兵',     hp:3, w:12,h:14, behavior:'guard',   speed:30, contact:1, spr:'e_soldier'},
-  '6':{name:'鬼火',     hp:1, w:9, h:9,  behavior:'floater', speed:44, contact:1, spr:'e_ghostfire', noGravity:true, ghost:true},
+  '6':{name:'鬼火',     hp:1, w:9, h:9,  behavior:'floater', speed:44, contact:1, skill:'lightBurst', skillCd:3.4, spr:'e_ghostfire', noGravity:true, ghost:true},
   '7':{name:'牛头',     hp:4, w:15,h:14, behavior:'charger', speed:26, chargeSpeed:195, contact:1, spr:'e_cowhead'},
   '8':{name:'马面',     hp:3, w:13,h:14, behavior:'shooter', proj:'bone', projCd:2.3, range:190, arc:true, spr:'e_horseface'},
-  '9':{name:'蜘蛛妖',   hp:1, w:13,h:8,  behavior:'walker',  speed:54, contact:1, effect:'poison', spr:'e_spider'},
+  '9':{name:'蜘蛛妖',   hp:1, w:13,h:8,  behavior:'walker',  speed:54, contact:1, effect:'poison', skill:'poisonFan', skillCd:3.0, spr:'e_spider'},
   '0':{name:'堕落天使', hp:3, w:14,h:13, behavior:'swooper', proj:'light', projCd:2.6, spr:'e_angel', noGravity:true},
   'i':{name:'冰霜妖灵', hp:2, w:12,h:13, behavior:'shooter', proj:'ice', projCd:2.1, range:165, spr:'e_ice', effect:'slow'},
 };
@@ -129,10 +128,9 @@ const LEVELS=[
       a.plat(49,51,9);  a.plat(74,76,11); a.plat(78,80,9); a.plat(84,86,8);
       a.plat(88,91,10);
       a.put(2,12,'P'); a.put(6,12,'A'); a.put(13,12,'5');
-      a.put(8,12,'1');
-      a.put(24,11,'1'); a.put(28,11,'1'); a.put(31,11,'1');
+      a.put(24,11,'1'); a.put(28,11,'1');
       a.put(25,8,'H'); a.put(39,8,'B'); a.put(50,8,'f');
-      a.put(47,11,'2'); a.put(54,11,'5');
+      a.put(34,10,'1'); a.put(47,11,'2'); a.put(54,11,'5'); a.put(58,11,'1');
       a.put(61,11,'F'); a.put(65,11,'1'); a.put(69,11,'3'); a.put(76,10,'2');
       a.put(85,7,'H'); a.put(89,9,'2'); a.put(94,11,'1');
       a.put(97,11,'1'); a.put(101,11,'2'); a.put(105,11,'3');
@@ -186,9 +184,9 @@ const LEVELS=[
       a.lava(86,92,14); a.plat(87,88,11); a.plat(90,91,9);
       a.ground(93,129,13);
       a.rect(128,0,129,12);
-      a.put(2,12,'P'); a.put(10,12,'H'); a.put(14,12,'4'); a.put(6,12,'4');
+      a.put(2,12,'P'); a.put(10,12,'H'); a.put(14,12,'4'); a.put(18,12,'4');
       a.put(26,12,'4'); a.put(30,12,'4'); a.put(34,12,'6'); a.put(40,12,'7'); a.put(44,12,'8');
-      a.plat(56,58,10); a.put(57,9,'t');
+      a.plat(56,58,10);
       a.plat(61,63,9); a.put(62,8,'H'); a.put(63,8,'g');
       a.put(54,12,'6'); a.put(60,12,'4'); a.put(64,12,'8'); a.put(68,12,'6');
       a.put(74,12,'F'); a.put(78,12,'7'); a.put(82,12,'8');
@@ -215,7 +213,7 @@ const LEVELS=[
       a.plat(102,103,11);
       a.ground(105,119,13);
       a.rect(118,0,119,12);
-      a.put(2,12,'P'); a.put(10,12,'C'); a.put(18,12,'0'); a.put(22,12,'1'); a.put(6,12,'1');
+      a.put(2,12,'P'); a.put(10,12,'C'); a.put(18,12,'0'); a.put(22,12,'1'); a.put(24,12,'1');
       a.put(31,12,'2'); a.put(32,12,'2'); a.put(36,12,'1');
       a.put(40,8,'H');
       a.put(42,12,'0'); a.put(46,12,'3');
@@ -243,7 +241,7 @@ const LEVELS=[
       a.plat(106,109,10); a.plat(112,115,8); a.plat(118,121,11);
       a.ground(124,139,12);
       a.rect(138,0,139,11);
-      a.put(2,12,'P'); a.put(8,12,'H'); a.put(12,12,'1'); a.put(5,12,'1');
+      a.put(2,12,'P'); a.put(8,12,'H'); a.put(12,12,'1'); a.put(14,12,'1');
       a.put(21,10,'3'); a.put(22,10,'3'); a.put(26,8,'9'); a.put(31,10,'4'); a.put(32,10,'4');
       a.put(37,7,'H'); a.put(43,10,'0'); a.put(49,9,'2'); a.put(50,9,'1');
       a.put(55,11,'7'); a.put(58,11,'7'); a.put(62,11,'8'); a.put(66,11,'i');

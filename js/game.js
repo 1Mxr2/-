@@ -9,7 +9,12 @@ CTX.imageSmoothingEnabled=false;
 const W=480, H=270, TILE=16;
 const RS=2;                       // 渲染倍率：960x540 背板，文字与描边更清晰
 const GRAV=830;
-const SPEED_SKILL={max:100,fillTime:6,duration:3,cooldown:6,multiplier:1.3};
+// 冲锋只前进约三个角色身位（角色宽约 9 像素），短时间高速完成
+const DASH_SKILL={distance:27,duration:0.12,cooldown:5,speed:225,invDuration:0.2,slots:3};
+const GARG_RAIN={spread:124,warningRadius:140};
+const SPIDER_PHASE2_SKILL_RATE=0.9;
+const JUDGE_PHASE2_SKILL_RATE=0.9;
+const SPIDER_VENOM_CAST_TIME=0.5*2.5;
 
 // 整数倍缩放适配窗口（保证像素锐利）
 function fitCanvas(){
@@ -189,9 +194,9 @@ const HELP_ROWS=[
   ['J  /  Z','挥击 / 射击（可斩落敌方弹幕）'],
   ['按住 ↑  /  W','向上攻击 · 向上射击'],
   ['空中按住 ↓ / S','向下攻击 · 向下射击'],
-  ['Q  /  1 - 6','切换已获得的神兵'],
+  ['Q  /  1 - 5','切换已获得的神兵'],
   ['E','与神仙妖怪交谈，领取加护'],
-  ['L','技能条满时加速 3 秒，冷却 6 秒'],
+  ['L / Shift','向前冲锋（三个独立冷却）'],
   ['P  /  Esc','暂停 · 打开设置'],
   ['M','静音开关'],
   ['F8  /  F9','跳关 · 无敌（调试用）'],
@@ -322,7 +327,7 @@ const player={
   onGround:false, coyote:0, jbuf:0, jumps:0,
   atkT:0, castT:0, atkBuf:0, swing:0, swingHit:null, aim:'fwd',
   dead:false, deadT:0, anim:0, spawn:{x:0,y:0}, safeT:0,
-  skillCharge:SPEED_SKILL.max, skillT:0, skillCd:0,
+  dashT:0, dashCd:[0,0,0], dashSlot:-1, aimX:1, aimY:0,
 };
 
 /* ============================================================
@@ -352,7 +357,6 @@ function buildLevel(idx){
       case 'M': lv.pickups.push({kind:'maxheart',x:px+3,y:py+3,w:10,h:10,t:0}); grid[y][x]='.'; break;
       case 'f': lv.pickups.push({kind:'wpn',wpn:'flysword',x:px+2,y:py+4,w:12,h:8,t:0}); grid[y][x]='.'; break;
       case 'b': lv.pickups.push({kind:'wpn',wpn:'bow',x:px+4,y:py+6,w:8,h:4,t:0}); grid[y][x]='.'; break;
-      case 't': lv.pickups.push({kind:'wpn',wpn:'talisman',x:px+4,y:py+4,w:8,h:8,t:0}); grid[y][x]='.'; break;
       case 'l': lv.pickups.push({kind:'wpn',wpn:'thunder',x:px+3,y:py+4,w:10,h:10,t:0}); grid[y][x]='.'; break;
       case 'g': lv.pickups.push({kind:'wpn',wpn:'flameblade',x:px+3,y:py+4,w:10,h:10,t:0}); grid[y][x]='.'; break;
       case 'Z': {
@@ -361,6 +365,8 @@ function buildLevel(idx){
         const b={boss:true,btype:lv.bossType,name:B.name,hp:B.hp,maxhp:B.hp,bar:1,bars:B.bars||1,
           scale:bs, x:px+8-bw/2, y:py+TILE-bh, w:bw,h:bh, vx:0,vy:0,face:-1,
           t:rand(0,2), state:'idle', stT:0, active:false, flash:0, phase:1,
+          lastSkill:'',
+          warningKey:'', warningPoints:null, warningTarget:null,
           anchor:{x:px,y:py}, dir:-1, onGround:false};
         lv.boss=b; grid[y][x]='.'; break;
       }
@@ -396,7 +402,7 @@ function startLevel(idx){
   player.fx={}; player.inv=1; player.dead=false; player.shield=0;
   player.cd=0; player.atkT=0; player.castT=0; player.atkBuf=0; player.swingHit=new Set(); player.aim='fwd';
   player.coyote=0; player.jbuf=0; player.jumps=0; player.safeT=0; player.lavaCd=0; player.spikeCd=0;
-  player.skillCharge=SPEED_SKILL.max; player.skillT=0; player.skillCd=0;
+  player.dashT=0; player.dashCd=[0,0,0]; player.dashSlot=-1; player.aimX=player.face; player.aimY=0;
   player.spawn={x:player.x,y:player.y};
   player.weapons=player.weapons.filter(w=>WEAPONS.some(v=>v.id===w));
   if(!player.weapons.length) player.weapons=['sword'];
@@ -492,20 +498,31 @@ function toast(text,color){ toasts.push({text,color:color||'#ffe8a0',t:2.6}); }
  * ============================================================ */
 function curWeapon(){ return WEAPONS.find(w=>w.id===player.weapons[player.wi])||WEAPONS[0]; }
 
-function updateSpeedSkill(dt){
+function updateDashSkill(dt){
   const p=player;
   if(p.dead) return;
-  p.skillT=Math.max(0,p.skillT-dt);
-  p.skillCd=Math.max(0,p.skillCd-dt);
-  p.skillCharge=Math.min(SPEED_SKILL.max,p.skillCharge+dt*SPEED_SKILL.max/SPEED_SKILL.fillTime);
+  const wasDashing=p.dashT>0;
+  p.dashT=Math.max(0,p.dashT-dt);
+  if(!Array.isArray(p.dashCd)) p.dashCd=[Math.max(0,p.dashCd||0),0,0];
+  while(p.dashCd.length<DASH_SKILL.slots) p.dashCd.push(0);
+  for(let i=0;i<DASH_SKILL.slots;i++){
+    p.dashCd[i]=Math.max(0,p.dashCd[i]-dt);
+    if(p.dashCd[i]<0.001) p.dashCd[i]=0;
+  }
+  if(wasDashing&&p.dashT===0){ p.vx=0; p.dashSlot=-1; }
 }
 
-function activateSpeedSkill(){
+function activateDashSkill(){
   const p=player;
-  if(p.dead||game.state!=='play'||p.skillT>0||p.skillCd>0||p.skillCharge<SPEED_SKILL.max) return false;
-  p.skillCharge=0; p.skillT=SPEED_SKILL.duration; p.skillCd=SPEED_SKILL.cooldown;
-  SFX.buff(); toast('神行加速！','#7fdce8');
-  burst(p.x+p.w/2,p.y+p.h/2,'#7fdce8',14,100,0.55);
+  if(p.dead||game.state!=='play'||p.dashT>0) return false;
+  if(!Array.isArray(p.dashCd)) p.dashCd=[Math.max(0,p.dashCd||0),0,0];
+  while(p.dashCd.length<DASH_SKILL.slots) p.dashCd.push(0);
+  const slot=p.dashCd.findIndex(cd=>cd<=0);
+  if(slot<0) return false;
+  p.dashT=DASH_SKILL.duration; p.dashSlot=slot; p.dashCd[slot]=DASH_SKILL.cooldown;
+  p.vx=p.face*DASH_SKILL.speed; p.vy=0; p.inv=Math.max(p.inv,DASH_SKILL.invDuration);
+  SFX.buff(); toast('神行冲锋！','#7fdce8');
+  burst(p.x+p.w/2,p.y+p.h/2,'#7fdce8',20,170,0.45);
   return true;
 }
 
@@ -523,10 +540,10 @@ function updatePlayer(dt){
   if(down('ArrowRight','KeyD')) mx++;
   if(mx!==0) p.face=mx;
   const slowMul=p.fx.slow?0.55:1;
-  const skillMul=p.skillT>0?SPEED_SKILL.multiplier:1;
-  const spdMul=(p.fx.speed?1.5:1)*skillMul*slowMul;
-  const target=mx*95*spdMul;
-  p.vx=lerp(p.vx,target, p.onGround?0.4:0.18);
+  const spdMul=(p.fx.speed?1.5:1)*slowMul;
+  const dashActive=p.dashT>0;
+  const target=dashActive?p.face*DASH_SKILL.speed:mx*95*spdMul;
+  p.vx=dashActive?target:lerp(p.vx,target, p.onGround?0.4:0.18);
   if(Math.abs(p.vx)<3&&mx===0) p.vx=0;
 
   // 跳跃（仅空格；↑/W 专职向上瞄准）
@@ -540,7 +557,14 @@ function updatePlayer(dt){
   if(!down('Space')&&p.vy<-120) p.vy=-120; // 可变跳跃高度
   p.vy=clamp(p.vy,-320,420);
 
-  moveEntity(p,dt);
+  if(dashActive){
+    p.vy=0;
+    moveEntity(p,dt,false);
+    if(Math.random()<dt*90){
+      particles.push({x:p.x+p.w/2-p.face*rand(3,10),y:p.y+rand(2,p.h-2),vx:-p.face*24,vy:rand(-12,12),life:0.18,maxLife:0.18,color:'#7fdce8',size:2});
+    }
+  }
+  else moveEntity(p,dt);
   if(p.onGround){ p.coyote=0.09; p.jumps=0; }
 
   // ---- 攻击（带输入缓冲：冷却中按键会在冷却结束瞬间自动出手）----
@@ -638,11 +662,15 @@ function groundTop(px,fromY){
   return g===null?level.h*TILE:g;
 }
 
-// 支持 ↑ 上挥 / 空中 ↓ 下挥，三个方向都能放电
+// 支持 ↑ 上挥 / 空中 ↓ 下挥，斜向攻击时雷电波也沿斜线飞行
 function castLightningWave(){
   const p=player, dir=p.aim;
   let w,h,vx,vy,sx,sy;
-  if(dir==='up'){ w=18; h=32; vx=0; vy=-215; sx=p.x+p.w/2; sy=p.y-4; }
+  if(dir==='diag'){
+    w=24; h=24; vx=p.aimX*152; vy=p.aimY*152;
+    sx=p.x+p.w/2+p.aimX*12; sy=p.y+p.h*0.42+p.aimY*12;
+  }
+  else if(dir==='up'){ w=18; h=32; vx=0; vy=-215; sx=p.x+p.w/2; sy=p.y-4; }
   else if(dir==='down'){ w=18; h=32; vx=0; vy=215; sx=p.x+p.w/2; sy=p.y+p.h+4; }
   else { w=32; h=18; vx=p.face*215; vy=0; sx=p.x+p.w/2+p.face*16; sy=p.y+p.h*0.42; }
   game_projs.push({team:'p',x:sx-w/2,y:sy-h/2,w,h,vx,vy,grav:0,
@@ -654,14 +682,14 @@ function castLightningWave(){
     life:0.28,maxLife:0.28,color:i%2?'#7fdce8':'#ffffff',size:1.5});
 }
 
-// 雷火符优先瞄准前方目标，保留抛物线高度，避免炸弹从敌人头顶飞过。
-function lobTarget(p){
+function lobTarget(p,maxRange){
   const cx=p.x+p.w/2, cy=p.y+p.h/2;
+  maxRange=maxRange||240;
   let best=null, bestScore=Infinity;
   const consider=e=>{
     if(!e||e.dying||e.gone) return;
     const ex=e.x+e.w/2, ey=e.y+e.h/2, dx=ex-cx;
-    if(p.face*dx<-18||Math.abs(dx)>240||Math.abs(ey-cy)>150) return;
+    if(p.face*dx<-18||Math.abs(dx)>maxRange||Math.abs(ey-cy)>150) return;
     const score=Math.abs(dx)+Math.abs(ey-cy)*0.7;
     if(score<bestScore){ bestScore=score; best={x:ex,y:ey}; }
   };
@@ -675,17 +703,23 @@ function doAttack(){
   const cdMul=p.fx.curse?1.8:1;
   p.cd=w.cd*cdMul;
   p.swing++; p.swingHit=new Set();
-  // 方向攻击：按住↑上打；空中按住↓下打
+  // 方向攻击：W+A / W+D 斜向上，空中 S+A / S+D 斜向下
   const up=down('ArrowUp','KeyW');
   const dn=!p.onGround&&down('ArrowDown','KeyS');
-  p.aim=up?'up':(dn?'down':'fwd');
+  const left=down('ArrowLeft','KeyA'), right=down('ArrowRight','KeyD');
+  const horizontal=left?-1:(right?1:0), vertical=up?-1:(dn?1:0);
+  if(horizontal&&vertical){ p.aim='diag'; p.aimX=horizontal; p.aimY=vertical; }
+  else if(vertical){ p.aim=vertical<0?'up':'down'; p.aimX=0; p.aimY=vertical; }
+  else { p.aim='fwd'; p.aimX=p.face; p.aimY=0; }
   if(w.kind==='melee'){
     p.atkT=0.16;
     if(p.onGround&&p.aim==='fwd') p.vx=clamp(p.vx+p.face*70,-160,160); // 出剑小前冲
     if(w.elem==='thunder') castLightningWave();               // 雷霆之刃：雷电波（含上/下挥）
     if(w.elem==='fire'){                                      // 炎狱双刃：火焰波（上挥 / 下劈 / 平推三向）
       let fw=null;
-      if(up){ fw={x:p.x+p.w/2-7,y:p.y-26,w:14,h:26,vx:0,vy:-195}; }
+      if(p.aim==='diag'){
+        fw={x:p.aimX>0?p.x+p.w-2:p.x-16,y:p.aimY<0?p.y-18:p.y+p.h-2,w:18,h:18,vx:p.aimX*138,vy:p.aimY*138,diag:true};
+      }else if(up){ fw={x:p.x+p.w/2-7,y:p.y-26,w:14,h:26,vx:0,vy:-195}; }
       else if(dn){ fw={x:p.x+p.w/2-7,y:p.y+p.h+2,w:14,h:26,vx:0,vy:195}; }
       else{
         const wx=p.x+p.w/2+p.face*20;
@@ -706,10 +740,11 @@ function doAttack(){
     const vert=p.aim!=='fwd';
     if(w.kind==='lob'){
       let vx=p.face*(w.lvx||150), vy=w.lvy||-190;
-      if(p.aim==='up'){ vx=p.face*40; vy=-270; }
+      if(p.aim==='diag'){ vx=p.aimX*(w.lvx||150)*0.707; vy=p.aimY*Math.abs(w.lvy||190)*0.707; }
+      else if(p.aim==='up'){ vx=p.face*40; vy=-270; }
       else if(p.aim==='down'){ vx=p.face*30; vy=140; }
       else{
-        const target=lobTarget(p), gravity=GRAV*0.6;
+        const target=lobTarget(p,w.lobRange), gravity=GRAV*0.6;
         if(target){
           const tx=target.x-cx, flight=clamp(Math.abs(tx)/Math.abs(vx||1),0.34,0.9);
           vy=clamp((target.y-cy-0.5*gravity*flight*flight)/flight,-340,260);
@@ -721,7 +756,8 @@ function doAttack(){
         life:2.4,spr:w.spr,face:p.face,lob:true});
     }else{
       let vx=p.face*w.speed, vy=0, sx=cx+p.face*6, sy=cy;
-      if(p.aim==='up'){ vx=0; vy=-w.speed; sx=cx-3; sy=p.y-12; }
+      if(p.aim==='diag'){ vx=p.aimX*w.speed*0.707; vy=p.aimY*w.speed*0.707; sx=cx+p.aimX*5; sy=cy+p.aimY*5; }
+      else if(p.aim==='up'){ vx=0; vy=-w.speed; sx=cx-3; sy=p.y-12; }
       else if(p.aim==='down'){ vx=0; vy=w.speed; sx=cx-3; sy=p.y+p.h+2; }
       game_projs.push({team:'p',x:sx,y:sy,w:vert?w.ph:w.pw,h:vert?w.pw:w.ph,vx,vy,grav:0,
         dmg:w.dmg,pierce:w.pierce,life:2.4,spr:w.spr,face:p.face,rot:vert});
@@ -735,7 +771,8 @@ function meleeHits(){
   const w=curWeapon(); if(w.kind!=='melee') return;
   const p=player;
   let box;
-  if(p.aim==='up') box={x:p.x-6,y:p.y-24,w:p.w+12,h:24};
+  if(p.aim==='diag') box={x:p.aimX>0?p.x+p.w-2:p.x-w.range+2,y:p.aimY<0?p.y-w.range:p.y+p.h,w:w.range,h:w.range};
+  else if(p.aim==='up') box={x:p.x-6,y:p.y-24,w:p.w+12,h:24};
   else if(p.aim==='down') box={x:p.x-6,y:p.y+p.h,w:p.w+12,h:22};
   else box={x:p.face>0?p.x+p.w-2:p.x-w.range+2, y:p.y-6, w:w.range, h:p.h+12};
   for(const e of level.enemies) tryMeleeHit(e,box);
@@ -815,14 +852,15 @@ function afterDeath(){
   const p=player;
   p.dead=false; p.hearts=p.maxHearts; p.fx={}; p.inv=1.5; p.shield=0;
   p.lavaCd=0; p.spikeCd=0; p.cd=0; p.atkT=0; p.castT=0; p.atkBuf=0; p.swingHit=new Set(); p.aim='fwd';
-  p.skillCharge=SPEED_SKILL.max; p.skillT=0; p.skillCd=0;
+  p.dashT=0; p.dashCd=[0,0,0]; p.dashSlot=-1; p.aimX=p.face; p.aimY=0;
   p.x=p.spawn.x; p.y=p.spawn.y; p.vx=0; p.vy=0;
   game_projs.length=0; hazards.length=0;
-  toast('回到检查点 · 剩余生命 × '+game.lives,'#d84040');
   game.state='play'; game.stateT=0;
 }
 
 function levelClear(){
+  player.hearts=player.maxHearts;
+  game.lives=3;
   SFX.gate();
   game.state='clear'; game.stateT=0;
   burst(player.x,player.y,'#ffe8a0',20,100,0.8);
@@ -859,7 +897,7 @@ function spawnEnemyProj(e,type,tx,ty,opt){
   const sp=P.speed;
   game_projs.push({team:'e',x:e.x+e.w/2-P.w/2,y:e.y+e.h/2-P.h/2,w:P.w,h:P.h,
     vx:(opt.vx!==undefined?opt.vx:dx/d*sp), vy:(opt.vy!==undefined?opt.vy:(P.grav? -170 : dy/d*sp)),
-    grav:P.grav?1:0, dmg:P.dmg, effect:P.effect, life:P.life, spr:P.spr,
+    grav:(opt.grav!==undefined?opt.grav:(P.grav?1:0)), dmg:P.dmg, effect:P.effect, life:P.life, spr:P.spr,
     face:dx>0?1:-1});
 }
 
@@ -876,13 +914,24 @@ function updateEnemy(e,dt){
 
   switch(E.behavior){
     case 'walker':{
-      e.vx=e.dir*E.speed;
-      if(e.onGround){
-        const ax=Math.floor((ecx+e.dir*(e.w/2+3))/TILE), ay=Math.floor((e.y+e.h+2)/TILE);
-        if(!isSolid(tileAt(ax,ay))&&tileAt(ax,ay)!=='=') e.dir*=-1;
+      if(e.state==='skillPre'){
+        e.vx=0; e.stT-=dt;
+        if(Math.random()<dt*18) particles.push({x:ecx+rand(-5,5),y:e.y-2,vx:0,vy:-18,life:0.25,maxLife:0.25,color:'#4fb84f',size:1.5});
+        if(e.stT<=0){
+          const dir=Math.sign(pcx-ecx)||e.dir;
+          for(const spread of [-42,0,42]) spawnEnemyProj(e,'poison',pcx,pcy,{vx:dir*85+spread,vy:-125});
+          e.state='patrol'; e.cd=E.skillCd||3;
+        }
+      }else{
+        e.vx=e.dir*E.speed;
+        if(e.onGround){
+          const ax=Math.floor((ecx+e.dir*(e.w/2+3))/TILE), ay=Math.floor((e.y+e.h+2)/TILE);
+          if(!isSolid(tileAt(ax,ay))&&tileAt(ax,ay)!=='=') e.dir*=-1;
+        }
+        if(e.hitWall) e.dir*=-1;
+        e.face=e.dir;
+        if(E.skill&&e.cd<=0&&dP<135){ e.state='skillPre'; e.stT=0.38; e.vx=0; }
       }
-      if(e.hitWall) e.dir*=-1;
-      e.face=e.dir;
       moveEntity(e,dt);
       break;
     }
@@ -940,16 +989,29 @@ function updateEnemy(e,dt){
       break;
     }
     case 'chaser':{
-      if(dP<150&&Math.abs(pcy-ecy)<30){ e.dir=pcx<ecx?-1:1; e.vx=e.dir*E.speed; }
-      else{
-        e.vx=e.dir*30;
-        if(e.onGround){
-          const ax=Math.floor((ecx+e.dir*(e.w/2+3))/TILE), ay=Math.floor((e.y+e.h+2)/TILE);
-          if(!isSolid(tileAt(ax,ay))&&tileAt(ax,ay)!=='=') e.dir*=-1;
+      if(e.state==='pouncePre'){
+        e.vx=0; e.stT-=dt; e.face=Math.sign(pcx-ecx)||e.face;
+        if(Math.random()<dt*20) particles.push({x:ecx-e.face*7,y:e.y+e.h,vx:-e.face*20,vy:-18,life:0.25,maxLife:0.25,color:'#f08020',size:1.5});
+        if(e.stT<=0){ e.state='pounce'; e.stT=0.68; e.dir=e.face; e.vx=e.dir*145; e.vy=-190; }
+      }else if(e.state==='pounce'){
+        e.vx=e.dir*145; e.stT-=dt; e.face=e.dir;
+        if(e.stT<=0){
+          hazards.push({pillar:true,x:ecx,y:groundTop(ecx,e.y+e.h),w:8,h:0,maxH:15,t:0,rise:0.12,dur:0.45,col:'fire'});
+          e.state='patrol'; e.cd=E.skillCd||3.2;
         }
-        if(e.hitWall) e.dir*=-1;
+      }else{
+        if(dP<150&&Math.abs(pcy-ecy)<30){ e.dir=pcx<ecx?-1:1; e.vx=e.dir*E.speed; }
+        else{
+          e.vx=e.dir*30;
+          if(e.onGround){
+            const ax=Math.floor((ecx+e.dir*(e.w/2+3))/TILE), ay=Math.floor((e.y+e.h+2)/TILE);
+            if(!isSolid(tileAt(ax,ay))&&tileAt(ax,ay)!=='=') e.dir*=-1;
+          }
+          if(e.hitWall) e.dir*=-1;
+        }
+        e.face=e.dir;
+        if(E.skill&&e.cd<=0&&dP<125){ e.state='pouncePre'; e.stT=0.42; e.vx=0; }
       }
-      e.face=e.dir;
       moveEntity(e,dt);
       break;
     }
@@ -984,6 +1046,15 @@ function updateEnemy(e,dt){
       e.vy=lerp(e.vy,Math.sin(ang)*E.speed,0.03);
       e.x+=e.vx*dt; e.y+=e.vy*dt;
       e.x=clamp(e.x,0,level.w*TILE-e.w); e.y=clamp(e.y,0,level.h*TILE-e.h);
+      if(E.skill&&e.cd<=0&&dP<155){
+        e.cd=E.skillCd||3.4;
+        const base=Math.atan2(pcy-ecy,pcx-ecx);
+        for(let i=-1;i<=1;i++){
+          const a=base+i*0.32;
+          game_projs.push({team:'e',x:ecx-2,y:ecy-2,w:5,h:5,vx:Math.cos(a)*125,vy:Math.sin(a)*125,grav:0,dmg:1,life:2.6,spr:'p_light',face:Math.cos(a)>0?1:-1});
+        }
+        SFX.shoot();
+      }
       if(Math.random()<dt*6) particles.push({x:ecx,y:ecy,vx:rand(-10,10),vy:rand(-10,10),life:0.4,maxLife:0.4,color:'#7fdce8',size:1});
       break;
     }
@@ -1098,10 +1169,18 @@ function updateBoss(b,dt){
     if(Math.abs(p.x-b.x)<170) activateBoss(b);
     return;
   }
+  if(BOSS_WARN_STATES.has(b.state)){
+    bossWarningPoints(b);
+  }else{
+    b.warningKey='';
+    b.warningPoints=null;
+    b.warningTarget=null;
+  }
   if(b.flash>0) b.flash-=dt;
   b.t+=dt; b.cd=(b.cd||0)-dt; b.stT-=dt;
   if(b.spawnT>0) b.spawnT-=dt;
   const pcx=p.x+p.w/2, pcy=p.y+p.h/2, bcx=b.x+b.w/2, bcy=b.y+b.h/2;
+  const wasBossAttack=BOSS_ATK.has(b.state);
   const wasPhase=b.phase;
   if(b.bars===1&&b.hp<b.maxhp*0.45&&b.phase===1){ b.phase=2; b.stT=0.8; b.state='rage'; game.shake=8; SFX.roar(); burst(bcx,bcy,'#f8d838',24,120,0.8); toast(b.name+' 暴怒了！','#d84040'); }
   if(b.state==='rage'&&b.stT<=0) b.state='idle';
@@ -1144,7 +1223,8 @@ function updateBoss(b,dt){
         }
       }else if(b.state==='rainPre'){
         // 飞到玩家上空准备落石
-        const tx=pcx-b.w/2, ty=Math.max(20,pcy-120);
+        const target=bossWarningTarget(b);
+        const tx=target.x-b.w/2, ty=Math.max(20,target.y-120);
         b.vx=lerp(b.vx,(tx-b.x)*3,0.12); b.vy=lerp(b.vy,(ty-b.y)*3,0.12);
         b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*30) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-10,10),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#f8d838',size:2});
@@ -1154,8 +1234,9 @@ function updateBoss(b,dt){
         b.vy=Math.sin(b.t*7)*10; b.x+=b.vx*dt*0.3; b.y+=b.vy*dt;
         if(b.rainT<=0){
           b.rainT=0.12;
-          const sx=clamp(pcx+rand(-130,130),10,level.w*TILE-10);
-          game_projs.push({team:'e',x:sx,y:b.y+b.h,w:5,h:5,vx:rand(-15,15),vy:150,grav:1,dmg:1,life:2.5,spr:'p_shard',face:1});
+          const target=bossWarningTarget(b);
+          const sx=clamp(target.x+rand(-GARG_RAIN.spread,GARG_RAIN.spread),10,level.w*TILE-10);
+          game_projs.push({team:'e',x:sx-2.5,y:b.y+b.h,w:5,h:5,vx:0,vy:150,grav:1,dmg:1,life:2.5,spr:'p_shard',face:1});
         }
         if(b.stT<=0){ b.state='idle'; b.cd=1.1; }
       }else if(b.state==='volley'){
@@ -1163,7 +1244,8 @@ function updateBoss(b,dt){
         b.face=pcx<bcx?-1:1;
         if(Math.random()<dt*24) particles.push({x:bcx+rand(-10,10),y:bcy+rand(-8,8),vx:0,vy:0,life:0.22,maxLife:0.22,color:'#c0c0d0',size:1.5});
         if(b.stT<=0){
-          const n=pc2?5:3, base=Math.atan2(pcy-bcy,pcx-bcx);
+          const target=bossWarningTarget(b);
+          const n=pc2?5:3, base=Math.atan2(target.y-bcy,target.x-bcx);
           for(let i=0;i<n;i++){
             const a=base+(i-(n-1)/2)*(pc2?0.3:0.26);
             game_projs.push({team:'e',x:bcx-2,y:bcy-2,w:5,h:5,vx:Math.cos(a)*160,vy:Math.sin(a)*160,grav:0,dmg:1,life:2.5,spr:'p_shard',face:1});
@@ -1173,7 +1255,10 @@ function updateBoss(b,dt){
       }else if(b.state==='tele'){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*30) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-10,10),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#c0c0d0',size:2});
-        if(b.stT<=0){ b.state='dive'; b.stT=1.1; b.vx=(pcx-bcx)/(pc2?0.34:0.42); b.vy=(pcy-bcy)/(pc2?0.34:0.42); }
+        if(b.stT<=0){
+          const target=bossWarningTarget(b);
+          b.state='dive'; b.stT=1.1; b.vx=(target.x-bcx)/(pc2?0.34:0.42); b.vy=(target.y-bcy)/(pc2?0.34:0.42);
+        }
       }else if(b.state==='dive'){
         b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*40) particles.push({x:bcx,y:bcy,vx:rand(-20,20),vy:rand(-20,20),life:0.2,maxLife:0.2,color:'#9aa8c8',size:1.5});
@@ -1202,34 +1287,64 @@ function updateBoss(b,dt){
         b.face=pcx<bcx?-1:1;
         if(b.cd<=0){
           const dir=Math.sign(pcx-bcx)||1;
-          const atk=Math.floor(b.t/(pc2?1.45:2.0))%4;
+           const skillInterval=pc2?1.05/SPIDER_PHASE2_SKILL_RATE:1.35;
+           const atk=Math.floor(b.t/skillInterval)%4;
           const r2=Math.random();
-          if(pc2&&r2<0.22){ b.state='venomPre'; b.stT=0.45; } // 二阶段新技能：万毒天降
-          else if(pc2&&r2<0.42){ b.state='webrPre'; b.stT=0.45; } // 二阶段新技能：天罗蛛网阵
-          else if(atk===0){ // 毒液三连
-            for(const vx of [-55,0,55]) spawnEnemyProj(b,'poison',pcx,pcy,{vx:dir*70+vx,vy:-190});
-          }else if(atk===1){ // 蛛网
-            spawnEnemyProj(b,'web',pcx,pcy,{vx:(pcx<bcx?-1:1)*(pc2?210:185),vy:0});
-          }else if(atk===2){ // 召唤小蛛（从空中落下）
-            const alive=level.enemies.filter(e=>e.etype==='9'&&!e.dying).length;
-            if(alive<4){
-              for(let i=0;i<2;i++){
-                const E=ENEMY_TYPES['9'];
-                level.enemies.push({etype:'9',name:E.name,hp:1,maxhp:1,x:bcx+rand(-10,10),y:b.y+b.h,w:E.w,h:E.h,vx:0,vy:-60,dir:Math.random()<0.5?-1:1,face:-1,t:0,cd:1,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,anchor:{},lastHitSwing:-1});
-              }
-              burst(bcx,b.y+b.h,'#9a4fd8',10,70,0.4);
+           if(pc2&&r2<0.28&&b.lastSkill!=='venomPre'){ b.state='venomPre'; b.stT=SPIDER_VENOM_CAST_TIME; } // 二阶段新技能：万毒天降
+          else if(pc2&&r2<0.52){ b.state='webrPre'; b.stT=0.5; } // 二阶段新技能：天罗蛛网阵
+           else if(atk===0){ b.state='poisonPre'; b.stT=0.45; }
+           else if(atk===1){ b.state='webPre'; b.stT=0.45; }
+           else if(atk===2){ b.state='summonPre'; b.stT=0.5; }
+           else{ b.state='swoopPre'; b.stT=0.4; } // 蛾扑俯冲
+           b.lastSkill=b.state;
+           b.cd=pc2?1.05/SPIDER_PHASE2_SKILL_RATE:1.45;
+        }
+      }else if(b.state==='poisonPre'){
+        b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+        if(Math.random()<dt*24) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-8,8),vx:0,vy:-20,life:0.3,maxLife:0.3,color:'#4fb84f',size:1.5});
+        if(b.stT<=0){
+          const target=bossWarningTarget(b), base=Math.atan2(target.y-bcy,target.x-bcx);
+          for(const spread of [-0.38,-0.19,0,0.19,0.38]){
+            const angle=base+spread;
+            spawnEnemyProj(b,'poison',target.x,target.y,{vx:Math.cos(angle)*155,vy:Math.sin(angle)*155,grav:0});
+          }
+          SFX.shoot(); b.state='hover';
+        }
+      }else if(b.state==='webPre'){
+        b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+        if(Math.random()<dt*24) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-8,8),vx:0,vy:0,life:0.3,maxLife:0.3,color:'#c0c0d0',size:1.5});
+        if(b.stT<=0){
+          const target=bossWarningTarget(b), angle=Math.atan2(target.y-bcy,target.x-bcx);
+          const speed=pc2?220:195;
+          for(const spread of pc2?[-0.16,0,0.16]:[-0.12,0,0.12]){
+            const webAngle=angle+spread;
+            spawnEnemyProj(b,'web',target.x,target.y,{vx:Math.cos(webAngle)*speed,vy:Math.sin(webAngle)*speed,grav:0});
+          }
+          SFX.shoot(); b.state='hover';
+        }
+      }else if(b.state==='summonPre'){
+        b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+        if(Math.random()<dt*20) particles.push({x:bcx+rand(-10,10),y:bcy+rand(-8,8),vx:0,vy:20,life:0.3,maxLife:0.3,color:'#9a4fd8',size:1.5});
+        if(b.stT<=0){
+          const alive=level.enemies.filter(e=>e.etype==='9'&&!e.dying).length;
+          if(alive<(pc2?6:4)){
+            for(let i=0;i<(pc2?3:2);i++){
+              const E=ENEMY_TYPES['9'];
+              level.enemies.push({etype:'9',name:E.name,hp:1,maxhp:1,x:bcx+rand(-10,10),y:b.y+b.h,w:E.w,h:E.h,vx:0,vy:-60,dir:Math.random()<0.5?-1:1,face:-1,t:0,cd:1,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,anchor:{},lastHitSwing:-1});
             }
-          }else{ b.state='swoopPre'; b.stT=0.4; } // 蛾扑俯冲
-          b.cd=pc2?1.45:2.0;
+            burst(bcx,b.y+b.h,'#9a4fd8',10,70,0.4);
+          }
+          b.state='hover';
         }
       }else if(b.state==='venomPre'){
-        // 万毒天降：在玩家附近连续落下毒液，逼迫玩家移动
+        // 万毒天降：延长蓄力后一次性落下毒液
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*24) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-8,8),vx:0,vy:20,life:0.3,maxLife:0.3,color:'#4fb84f',size:1.5});
         if(b.stT<=0){
-          for(let i=0;i<7;i++){
-            const sx=clamp(pcx+(i-3)*28+rand(-8,8),10,level.w*TILE-10);
-            game_projs.push({team:'e',x:sx,y:b.y+b.h,w:7,h:7,vx:rand(-12,12),vy:120,grav:1,dmg:1,effect:'poison',life:3,spr:'p_poison',face:1});
+          const target=bossWarningTarget(b);
+          for(let i=0;i<9;i++){
+            const sx=clamp(target.x+(i-4)*24+rand(-8,8),10,level.w*TILE-10);
+            game_projs.push({team:'e',x:sx-3.5,y:b.y+b.h,w:7,h:7,vx:0,vy:120,grav:1,dmg:1,effect:'poison',life:3,spr:'p_poison',face:1});
           }
           SFX.explode(); b.state='hover';
         }
@@ -1238,20 +1353,21 @@ function updateBoss(b,dt){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*24) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-8,8),vx:0,vy:0,life:0.3,maxLife:0.3,color:'#c0c0d0',size:1.5});
         if(b.stT<=0){
-          const base=Math.atan2(pcy-bcy,pcx-bcx);
-          for(let i=0;i<5;i++){
-            const a=base+(i-2)*0.3;
+          const target=bossWarningTarget(b), base=Math.atan2(target.y-bcy,target.x-bcx);
+          for(let i=0;i<7;i++){
+            const a=base+(i-3)*0.24;
             game_projs.push({team:'e',x:bcx-4,y:bcy-4,w:8,h:8,vx:Math.cos(a)*150,vy:Math.sin(a)*150,grav:0,dmg:1,effect:'slow',life:3,spr:'p_web',face:1});
           }
           SFX.shoot(); b.state='hover';
         }
       }else if(b.state==='swoopPre'){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
-        b.face=Math.sign(pcx-bcx)||b.face;
+        const target=bossWarningTarget(b);
+        b.face=Math.sign(target.x-bcx)||b.face;
         if(Math.random()<dt*24) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-8,8),vx:0,vy:0,life:0.3,maxLife:0.3,color:'#9a4fd8',size:1.5});
         if(b.stT<=0){
           b.state='swoop'; b.stT=0.7;
-          const dx=pcx-bcx, dy=pcy-bcy, d=Math.hypot(dx,dy)||1;
+          const dx=target.x-bcx, dy=target.y-bcy, d=Math.hypot(dx,dy)||1;
           b.vx=dx/d*235; b.vy=dy/d*235;
         }
       }else if(b.state==='swoop'){
@@ -1270,21 +1386,22 @@ function updateBoss(b,dt){
         b.face=pcx<bcx?-1:1;
         if(b.cd<=0){
           const roll=Math.random();
-          if(pc2&&roll<0.16){ b.state='inkcross'; b.stT=0.6; }   // 二阶段新技能：万墨归宗
-          else if(pc2&&roll<0.30){ b.state='blinkPre'; b.stT=0.45; } // 二阶段新技能：墨影闪斩
-          else if(roll<0.42){ b.state='inkfan'; b.stT=0.55; }
-          else if(roll<0.62){ b.state='pillarPre'; b.stT=0.55; } // 墨柱封印
-          else if(roll<0.82){ b.state='dashPre'; b.stT=0.5; }
+          if(pc2&&roll<0.22){ b.state='inkcross'; b.stT=0.65; }   // 二阶段新技能：万墨归宗
+          else if(pc2&&roll<0.40){ b.state='blinkPre'; b.stT=0.5; } // 二阶段新技能：墨影闪斩
+          else if(roll<0.55){ b.state='inkfan'; b.stT=0.55; }
+          else if(roll<0.76){ b.state='pillarPre'; b.stT=0.6; } // 墨柱封印
+          else if(roll<0.93){ b.state='dashPre'; b.stT=0.5; }
           else { b.state='summon'; b.stT=0.5; }
-          b.cd=pc2?1.45:2.1;
+          b.cd=pc2?1.05/JUDGE_PHASE2_SKILL_RATE:1.55;
         }
       }else if(b.state==='blinkPre'){
         // 墨影闪斩：消失后闪到玩家侧面，接一段快速冲刺
         b.vx*=0.86; b.vy*=0.86;
         if(Math.random()<dt*30) particles.push({x:bcx+rand(-10,10),y:bcy+rand(-12,12),vx:0,vy:0,life:0.2,maxLife:0.2,color:'#9a4fd8',size:2});
         if(b.stT<=0){
-          b.x=clamp(pcx-(b.face||1)*54,10,level.w*TILE-b.w-10); b.y=clamp(pcy-b.h,24,208-b.h);
-          b.face=Math.sign(pcx-b.x)||1; b.state='dash'; b.stT=0.38; b.vx=b.face*280;
+          const target=bossWarningTarget(b);
+          b.x=clamp(target.x-(b.face||1)*54,10,level.w*TILE-b.w-10); b.y=clamp(target.y-b.h,24,208-b.h);
+          b.face=Math.sign(target.x-b.x)||1; b.state='dash'; b.stT=0.38; b.vx=b.face*280;
           SFX.roar();
         }
       }else if(b.state==='inkcross'){
@@ -1293,35 +1410,38 @@ function updateBoss(b,dt){
         if(Math.random()<dt*26) particles.push({x:bcx+rand(-10,10),y:bcy+rand(-12,12),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#5a2a8c',size:1.5});
         if(b.stT<=0){
           SFX.roar(); game.shake=4;
-          for(let i=0;i<8;i++){
-            const a=Math.PI*2*i/8;
+          for(let i=0;i<12;i++){
+            const a=Math.PI*2*i/12;
             game_projs.push({team:'e',x:bcx-3,y:bcy-3,w:7,h:7,vx:Math.cos(a)*118,vy:Math.sin(a)*118,grav:0,dmg:1,effect:'curse',life:3.5,spr:'p_ink',face:1});
           }
           b.state='idle';
         }
       }else if(b.state==='pillarPre'){
-        b.face=Math.sign(pcx-bcx)||b.face;
+        const target=bossWarningTarget(b);
+        b.face=Math.sign(target.x-bcx)||b.face;
         if(Math.random()<dt*26) particles.push({x:bcx+rand(-8,8),y:bcy+rand(-10,10),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#5a2a8c',size:1.5});
         if(b.stT<=0){
           SFX.explode();
-          const n=pc2?5:3;
+          const n=pc2?7:5;
           for(let i=0;i<n;i++){
-            const px2=clamp(pcx+(i-(n-1)/2)*(pc2?46:36),10,level.w*TILE-10);
+            const px2=clamp(target.x+(i-(n-1)/2)*(pc2?46:36),10,level.w*TILE-10);
             hazards.push({pillar:true,x:px2,y:groundTop(px2,player.y+player.h),w:10,h:0,maxH:28,t:0,rise:0.3,dur:0.7,col:'ink'});
           }
           b.state='idle';
         }
       }else if(b.state==='inkfan'){
         if(b.stT<=0){
-          const n=pc2?5:3;
+          const target=bossWarningTarget(b);
+          const n=pc2?7:5;
           for(let i=0;i<n;i++){
-            const a=Math.atan2(pcy-bcy,pcx-bcx)+(i-(n-1)/2)*0.32;
+            const a=Math.atan2(target.y-bcy,target.x-bcx)+(i-(n-1)/2)*0.32;
             game_projs.push({team:'e',x:bcx-3,y:bcy-3,w:7,h:7,vx:Math.cos(a)*130,vy:Math.sin(a)*130,grav:0,dmg:1,effect:'curse',life:3.5,spr:'p_ink',face:1});
           }
           SFX.shoot(); b.state='idle';
         }
       }else if(b.state==='dashPre'){
-        b.face=Math.sign(pcx-bcx)||b.face;
+        const target=bossWarningTarget(b);
+        b.face=Math.sign(target.x-bcx)||b.face;
         if(Math.random()<dt*30) particles.push({x:bcx+rand(-8,8),y:bcy+rand(-10,10),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#9a4fd8',size:1.5});
         if(b.stT<=0){ b.state='dash'; b.stT=0.5; b.vx=b.face*235; }
       }else if(b.state==='dash'){
@@ -1336,10 +1456,10 @@ function updateBoss(b,dt){
       }else if(b.state==='summon'){
         if(b.stT<=0){
           const alive=level.enemies.filter(e=>e.etype==='6'&&!e.dying).length;
-          if(alive<(pc2?3:2)){
+          if(alive<(pc2?5:3)){
             const E=ENEMY_TYPES['6'];
-            level.enemies.push({etype:'6',name:'鬼火',hp:1,maxhp:1,x:bcx+rand(-30,30),y:bcy,w:E.w,h:E.h,vx:0,vy:0,dir:1,face:1,t:0,cd:2,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,noGravity:true,anchor:{},lastHitSwing:-1});
-            burst(bcx,bcy,'#7fdce8',8,60,0.4);
+            for(let i=0;i<(pc2?3:2);i++) level.enemies.push({etype:'6',name:'鬼火',hp:1,maxhp:1,x:bcx+rand(-30,30),y:bcy,w:E.w,h:E.h,vx:0,vy:0,dir:1,face:1,t:0,cd:1.2,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,noGravity:true,anchor:{},lastHitSwing:-1});
+            burst(bcx,bcy,'#7fdce8',12,70,0.45);
           }
           b.state='idle';
         }
@@ -1382,8 +1502,9 @@ function updateBoss(b,dt){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(Math.random()<dt*26) particles.push({x:bcx+rand(-14,14),y:bcy+rand(-10,10),vx:0,vy:-30,life:0.3,maxLife:0.3,color:'#f8d838',size:2});
         if(b.stT<=0){
+          const target=bossWarningTarget(b);
           for(let i=0;i<6;i++){
-            const sx=clamp(pcx+(i-2.5)*34+rand(-10,10),10,level.w*TILE-10);
+            const sx=clamp(target.x+(i-2.5)*34+rand(-10,10),10,level.w*TILE-10);
             game_projs.push({team:'e',x:sx,y:20,w:7,h:7,vx:rand(-18,18),vy:145,grav:1,dmg:1,effect:'burn',life:3,spr:'p_fire',face:1});
           }
           SFX.explode(); b.state='hover';
@@ -1391,10 +1512,11 @@ function updateBoss(b,dt){
       }else if(b.state==='fanPre'){
         // 烈焰风暴：朝玩家扇形喷出五发火球
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
-        b.face=Math.sign(pcx-bcx)||b.face;
+        const target=bossWarningTarget(b);
+        b.face=Math.sign(target.x-bcx)||b.face;
         if(Math.random()<dt*28) particles.push({x:bcx+rand(-14,14),y:bcy+rand(-10,10),vx:0,vy:-40,life:0.3,maxLife:0.3,color:'#f08020',size:2});
         if(b.stT<=0){
-          const base=Math.atan2(pcy-bcy,pcx-bcx);
+          const base=Math.atan2(target.y-bcy,target.x-bcx);
           for(let i=0;i<5;i++){
             const a=base+(i-2)*0.28;
             game_projs.push({team:'e',x:bcx-3,y:bcy-3,w:7,h:7,vx:Math.cos(a)*175,vy:Math.sin(a)*175,grav:0,dmg:1,effect:'burn',life:3,spr:'p_fire',face:1});
@@ -1403,7 +1525,8 @@ function updateBoss(b,dt){
         }
       }else if(b.state==='dashPre'){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
-        b.face=Math.sign(pcx-bcx)||b.face;
+        const target=bossWarningTarget(b);
+        b.face=Math.sign(target.x-bcx)||b.face;
         if(Math.random()<dt*30) particles.push({x:bcx+rand(-14,14),y:bcy+rand(-12,12),vx:0,vy:-50,life:0.3,maxLife:0.3,color:'#f08020',size:2});
         if(b.stT<=0){ b.state='dash'; b.stT=0.6; b.vx=b.face*300; b.vy=0; SFX.roar(); }
       }else if(b.state==='dash'){
@@ -1418,9 +1541,10 @@ function updateBoss(b,dt){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(b.stT<=0){
           b.state='hover'; game.shake=7; SFX.explode();
+          const target=bossWarningTarget(b);
           const n=pc2?7:3;
           for(let i=0;i<n;i++){
-            const px2=clamp(pcx+(i-(n-1)/2)*(pc2?30:34),10,level.w*TILE-10);
+            const px2=clamp(target.x+(i-(n-1)/2)*(pc2?30:34),10,level.w*TILE-10);
             hazards.push({pillar:true,x:px2,y:groundTop(px2,player.y+player.h),w:10,h:0,maxH:30,t:0,rise:0.28,dur:0.75});
           }
         }
@@ -1428,7 +1552,8 @@ function updateBoss(b,dt){
         b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
         if(b.stT<=0){
           b.state='hover';
-          for(const vy of [-230,-160]) spawnEnemyProj(b,'fire',pcx,pcy,{vx:Math.sign(pcx-bcx)*110,vy});
+          const target=bossWarningTarget(b);
+          for(const vy of [-230,-160]) spawnEnemyProj(b,'fire',target.x,target.y,{vx:Math.sign(target.x-bcx)*110,vy});
         }
       }
       if(pc2&&Math.random()<dt*14) particles.push({x:bcx+rand(-14,14),y:b.y+rand(0,b.h),vx:rand(-10,10),vy:-60,life:0.4,maxLife:0.4,color:'#f08020',size:2});
@@ -1445,22 +1570,33 @@ function updateBoss(b,dt){
           b.face=pcx<bcx?-1:1;
           if(b.cd<=0){
             const roll=Math.random();
-            if(roll<0.38){
-              for(let i=0;i<8;i++){ const a=Math.PI*2*i/8;
-                game_projs.push({team:'e',x:bcx-2,y:bcy-2,w:4,h:10,vx:Math.cos(a)*120,vy:Math.sin(a)*120,grav:0,dmg:1,life:3,spr:'p_light',face:1}); }
-              SFX.shoot();
-            }else if(roll<0.66){ // 三连光弹齐射
-              const base=Math.atan2(pcy-bcy,pcx-bcx);
-              for(let i=0;i<3;i++){
-                const a=base+(i-1)*0.2;
-                game_projs.push({team:'e',x:bcx-2,y:bcy-2,w:4,h:10,vx:Math.cos(a)*165,vy:Math.sin(a)*165,grav:0,dmg:1,life:3,spr:'p_light',face:1});
-              }
-              SFX.shoot();
-            }else{ b.state='divePre'; b.stT=0.5; }
+            if(roll<0.38){ b.state='ringPre'; b.stT=0.45; }
+            else if(roll<0.66){ b.state='triplePre'; b.stT=0.42; }
+            else{ b.state='divePre'; b.stT=0.5; }
             b.cd=1.7;
           }
+        }else if(b.state==='ringPre'){
+          if(Math.random()<dt*28) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-12,12),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#7fdce8',size:1.5});
+          if(b.stT<=0){
+            for(let i=0;i<8;i++){ const a=Math.PI*2*i/8;
+              game_projs.push({team:'e',x:bcx-2,y:bcy-2,w:4,h:10,vx:Math.cos(a)*120,vy:Math.sin(a)*120,grav:0,dmg:1,life:3,spr:'p_light',face:1}); }
+            SFX.shoot(); b.state='idle';
+          }
+        }else if(b.state==='triplePre'){
+          if(Math.random()<dt*28) particles.push({x:bcx+rand(-10,10),y:bcy+rand(-10,10),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#7fdce8',size:1.5});
+          if(b.stT<=0){
+            const target=bossWarningTarget(b), base=Math.atan2(target.y-bcy,target.x-bcx);
+            for(let i=0;i<3;i++){
+              const a=base+(i-1)*0.2;
+              game_projs.push({team:'e',x:bcx-2,y:bcy-2,w:4,h:10,vx:Math.cos(a)*165,vy:Math.sin(a)*165,grav:0,dmg:1,life:3,spr:'p_light',face:1});
+            }
+            SFX.shoot(); b.state='idle';
+          }
         }else if(b.state==='divePre'){
-          if(b.stT<=0){ b.state='dive'; b.stT=0.9; b.vx=(pcx-bcx)/0.4; b.vy=(pcy-bcy)/0.4; }
+          if(b.stT<=0){
+            const target=bossWarningTarget(b);
+            b.state='dive'; b.stT=0.9; b.vx=(target.x-bcx)/0.4; b.vy=(target.y-bcy)/0.4;
+          }
         }else if(b.state==='dive'){
           b.x+=b.vx*dt; b.y+=b.vy*dt;
           if(b.stT<=0){ b.state='idle'; }
@@ -1478,34 +1614,50 @@ function updateBoss(b,dt){
           if(b.cd<=0){
             const roll=Math.random();
             if(p3&&roll<0.18){ b.state='nova'; b.stT=0.7; }   // 三阶段新技能：混沌新星
-            else if(roll<0.3){
-              const n=p3?7:5;
-              for(let i=0;i<n;i++) game_projs.push({team:'e',x:bcx-3,y:bcy,w:7,h:7,vx:b.face*(70+i*(p3?26:22)),vy:-200-i*8,grav:1,dmg:1,effect:'curse',life:4,spr:'p_ink',face:b.face});
-              SFX.shoot();
-            }else if(roll<0.46){
-              const alive=level.enemies.filter(e=>e.etype==='6'&&!e.dying).length;
-              if(alive<(p3?4:3)){
-                const E=ENEMY_TYPES['6'];
-                for(let i=0;i<2;i++) level.enemies.push({etype:'6',name:'鬼火',hp:1,maxhp:1,x:bcx+rand(-40,40),y:bcy,w:E.w,h:E.h,vx:0,vy:0,dir:1,face:1,t:0,cd:2,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,anchor:{},lastHitSwing:-1});
-                burst(bcx,bcy,'#7fdce8',10,70,0.4);
-              }
-            }else if(roll<0.7){ // 噬魂珠（追踪）
-              const n=p3?4:3;
-              for(let i=0;i<n;i++){
-                const a=rand(0,Math.PI*2);
-                const sp=p3?100:85;
-                game_projs.push({team:'e',x:bcx-4,y:bcy-4,w:8,h:8,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,grav:0,dmg:1,effect:'curse',life:5,spr:'p_ink',face:1,home:true});
-              }
-              SFX.debuff();
-            }else{ b.state='tpOut'; b.stT=p3?0.28:0.35; }
+            else if(roll<0.3){ b.state='inkRainPre'; b.stT=0.42; }
+            else if(roll<0.46){ b.state='summonPre'; b.stT=0.46; }
+            else if(roll<0.7){ b.state='orbPre'; b.stT=0.42; }
+            else{ b.state='tpOut'; b.stT=p3?0.42:0.5; }
             b.cd=p3?0.95:1.5;
+          }
+        }else if(b.state==='inkRainPre'){
+          b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+          if(Math.random()<dt*28) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-10,10),vx:0,vy:20,life:0.3,maxLife:0.3,color:'#9a4fd8',size:1.5});
+          if(b.stT<=0){
+            const n=p3?7:5;
+            for(let i=0;i<n;i++) game_projs.push({team:'e',x:bcx-3,y:bcy,w:7,h:7,vx:b.face*(70+i*(p3?26:22)),vy:-200-i*8,grav:1,dmg:1,effect:'curse',life:4,spr:'p_ink',face:b.face});
+            SFX.shoot(); b.state='hover';
+          }
+        }else if(b.state==='summonPre'){
+          b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+          if(Math.random()<dt*26) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-12,12),vx:0,vy:0,life:0.3,maxLife:0.3,color:'#7fdce8',size:1.5});
+          if(b.stT<=0){
+            const alive=level.enemies.filter(e=>e.etype==='6'&&!e.dying).length;
+            if(alive<(p3?4:3)){
+              const E=ENEMY_TYPES['6'];
+              for(let i=0;i<2;i++) level.enemies.push({etype:'6',name:E.name,hp:1,maxhp:1,x:bcx+rand(-40,40),y:bcy,w:E.w,h:E.h,vx:0,vy:0,dir:1,face:1,t:0,cd:2,state:'patrol',stT:0,active:true,flash:0,onGround:false,sprName:E.spr,anchor:{},lastHitSwing:-1});
+              burst(bcx,bcy,'#7fdce8',10,70,0.4);
+            }
+            b.state='hover';
+          }
+        }else if(b.state==='orbPre'){
+          b.vx*=0.9; b.vy*=0.9; b.x+=b.vx*dt; b.y+=b.vy*dt;
+          if(Math.random()<dt*26) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-12,12),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#e08830',size:1.5});
+          if(b.stT<=0){
+            const n=p3?4:3;
+            for(let i=0;i<n;i++){
+              const a=rand(0,Math.PI*2), sp=p3?100:85;
+              game_projs.push({team:'e',x:bcx-4,y:bcy-4,w:8,h:8,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,grav:0,dmg:1,effect:'curse',life:5,spr:'p_ink',face:1,home:true});
+            }
+            SFX.debuff(); b.state='hover';
           }
         }else if(b.state==='tpOut'){
           if(Math.random()<dt*40) particles.push({x:bcx+rand(-12,12),y:bcy+rand(-12,12),vx:0,vy:0,life:0.25,maxLife:0.25,color:'#9a4fd8',size:2});
           if(b.stT<=0){
-            b.x=clamp(pcx-b.face*70,10,level.w*TILE-b.w-10); b.y=pcy-20;
+            const target=bossWarningTarget(b);
+            b.x=clamp(target.x-b.face*70,10,level.w*TILE-b.w-10); b.y=target.y-20;
             burst(b.x+b.w/2,b.y+b.h/2,'#9a4fd8',10,70,0.4);
-            b.state='dash'; b.stT=0.55; b.vx=Math.sign(pcx-b.x)*230; b.face=Math.sign(b.vx)||1;
+            b.state='dash'; b.stT=0.55; b.vx=Math.sign(target.x-b.x)*230; b.face=Math.sign(b.vx)||1;
           }
         }else if(b.state==='nova'){
           // 混沌新星：蓄力后 12 向大爆发（光弹与墨弹交替）
@@ -1531,6 +1683,7 @@ function updateBoss(b,dt){
       break;
     }
   }
+  if(wasBossAttack&&!BOSS_ATK.has(b.state)) b.cd=Math.max(b.cd,0.8);
   // Boss 接触伤害
   if(!p.dead&&overlap(p,b)){
     const eff=b.btype==='flame'?'burn':(b.btype==='chaos'&&b.phase===2?'curse':undefined);
@@ -1539,7 +1692,119 @@ function updateBoss(b,dt){
 }
 
 // Boss 处于攻击/蓄力姿势的状态集合
-const BOSS_ATK=new Set(['tele','volley','rainPre','rain','roar','swoopPre','swoop','venomPre','webrPre','blinkPre','dashPre','dash','inkcross','inkfan','pillarPre','summon','slamPre','hurlPre','meteorPre','infernoPre','fanPre','nova','tpOut','divePre','dive','rage','charge']);
+const BOSS_ATK=new Set(['tele','volley','rainPre','rain','roar','swoopPre','swoop','venomPre','webrPre','blinkPre','dashPre','dash','inkcross','inkfan','pillarPre','summon','summonPre','slamPre','hurlPre','meteorPre','infernoPre','fanPre','nova','tpOut','divePre','dive','rage','charge','ringPre','triplePre','poisonPre','webPre','inkRainPre','orbPre']);
+const BOSS_WARN_STATES=new Set(['tele','volley','rainPre','rain','roar','swoopPre','venomPre','webrPre','blinkPre','inkfan','pillarPre','slamPre','dashPre','hurlPre','meteorPre','infernoPre','fanPre','nova','tpOut','divePre','ringPre','triplePre','poisonPre','webPre','inkRainPre','orbPre']);
+
+function warningSurfaceY(px,fromY){
+  return groundTop(px,fromY)+1;
+}
+
+function bossWarningPoints(b){
+  const playerX=player.x+player.w/2;
+  const state=b.state;
+  if(!BOSS_WARN_STATES.has(state)){
+    b.warningKey='';
+    b.warningPoints=null;
+    b.warningTarget=null;
+    return [];
+  }
+  const phaseKey=(b.phase||1);
+  const carryWarning=state==='rain'&&b.warningKey==='rainPre|'+phaseKey;
+  if(carryWarning&&b.warningPoints&&b.warningTarget){
+    b.warningKey=state+'|'+phaseKey;
+    return b.warningPoints;
+  }
+  const warningKey=state+'|'+phaseKey;
+  if(b.warningKey===warningKey&&b.warningPoints&&b.warningTarget) return b.warningPoints;
+  const bossX=b.x+b.w/2, bossGround=warningSurfaceY(bossX,b.y+b.h);
+  const playerGround=warningSurfaceY(playerX,player.y+player.h);
+  const points=[];
+  const add=(x,y,rx,ry)=>points.push({x,y,rx,ry});
+  const addPlayer=(rx,ry)=>add(playerX,playerGround,rx,ry);
+  const addBoss=(rx,ry)=>add(bossX,bossGround,rx,ry);
+  const addGround=(x,rx,ry)=>add(x,warningSurfaceY(x,player.y+player.h),rx,ry);
+  const dashRx=b.w/2+player.w/2, dashRy=Math.max(8,b.h/2);
+
+  if(state==='roar'){
+    add(bossX-24,bossGround,30,2.4);
+    add(bossX+24,bossGround,30,2.4);
+  }else if(state==='infernoPre'||state==='ringPre'||state==='nova'||state==='orbPre'){
+    const size=state==='orbPre'?28:34;
+    addBoss(size,2.4);
+  }else if(state==='pillarPre'||state==='slamPre'){
+    const count=state==='slamPre'?(b.phase===2?7:3):(b.phase===2?7:5);
+    const gap=state==='slamPre'?(b.phase===2?30:34):(b.phase===2?46:36);
+    for(let i=0;i<count;i++){
+      const x=clamp(playerX+(i-(count-1)/2)*gap,10,level.w*TILE-10);
+      addGround(x,10,2.4);
+    }
+  }else if(state==='dashPre'){
+    if(b.btype==='flame'){
+      const count=4, step=48;
+      for(let i=1;i<=count;i++){
+        const x=clamp(bossX+b.face*i*step,10,level.w*TILE-10);
+        addGround(x,9,2.4);
+      }
+    }else{
+      addPlayer(dashRx,dashRy);
+    }
+  }else if(state==='meteorPre'){
+    addPlayer(96,2.4);
+  }else if(state==='venomPre'){
+    addPlayer(108,2.4);
+  }else if(state==='rainPre'||state==='rain'){
+    addPlayer(GARG_RAIN.warningRadius,2.4);
+  }else if(state==='swoopPre'||state==='tele'||state==='blinkPre'||state==='divePre'||state==='tpOut'){
+    addPlayer(dashRx,dashRy);
+  }else if(state==='inkRainPre'){
+    addBoss(44,2.4);
+  }else if(state==='inkfan'||state==='fanPre'){
+    addPlayer(36,2.4);
+  }else if(state==='webrPre'){
+    addPlayer(42,2.4);
+  }else if(state==='poisonPre'){
+    addPlayer(32,2.4);
+  }else if(state==='volley'){
+    addPlayer(30,2.4);
+  }else if(state==='webPre'||state==='triplePre'){
+    addPlayer(28,2.4);
+  }else if(state==='hurlPre'){
+    addPlayer(20,2.4);
+  }else{
+    addPlayer(16,2.4);
+  }
+  b.warningKey=warningKey;
+  b.warningPoints=points;
+  b.warningTarget={x:playerX,y:player.y+player.h/2};
+  return points;
+}
+
+function bossWarningTarget(b){
+  return b.warningTarget||{x:player.x+player.w/2,y:player.y+player.h/2};
+}
+
+function drawBossWarnings(b){
+  if(!b||b.gone||b.dying||!b.active||!BOSS_WARN_STATES.has(b.state)) return;
+  const pulse=0.62+Math.sin(game.frame/2.5)*0.2;
+  const warningPoints=bossWarningPoints(b);
+  CTX.save();
+  CTX.globalCompositeOperation='source-over';
+  CTX.globalAlpha=1;
+  CTX.strokeStyle='rgba(255,80,80,'+pulse.toFixed(2)+')';
+  CTX.lineWidth=1;
+  for(const point of warningPoints){
+    const rx=point.rx+Math.sin(game.frame/2.5)*0.8;
+    const ry=2.4+Math.sin(game.frame/2.5)*0.15;
+    CTX.beginPath();
+    CTX.ellipse(point.x,point.y,Math.max(2,rx),Math.max(2,ry),0,0,Math.PI*2);
+    CTX.stroke();
+    CTX.globalAlpha=0.16+0.08*Math.sin(game.frame/2.5);
+    CTX.fillStyle='#ff5050';
+    CTX.fill();
+    CTX.globalAlpha=1;
+  }
+  CTX.restore();
+}
 
 function bossDie(b){
   b.dying=false; b.gone=true;
@@ -1588,15 +1853,13 @@ function updateProjs(dt){
     if(pr.team==='e'&&Math.random()<dt*8) particles.push({x:pr.x+pr.w/2,y:pr.y+pr.h/2,vx:0,vy:0,life:0.2,maxLife:0.2,color:'#f08020',size:1});
     if(pr.team==='p'&&pr.spr==='p_flysword'&&Math.random()<dt*40) particles.push({x:pr.x+(pr.vx<0?pr.w:0),y:pr.y+pr.h/2,vx:-pr.vx*0.06,vy:rand(-8,8),life:0.22,maxLife:0.22,color:'#7fdce8',size:1.5});
     if(pr.lightning&&Math.random()<dt*60) particles.push({x:pr.x+rand(0,pr.w),y:pr.y+pr.h/2+rand(-7,7),vx:-pr.vx*0.18,vy:rand(-25,25),life:0.18,maxLife:0.18,color:Math.random()<0.5?'#7fdce8':'#ffffff',size:1.2});
-    // 投掷物撞到任何地形表面都触发雷火符爆炸分裂。
     const tx=Math.floor((pr.x+pr.w/2)/TILE), ty=Math.floor((pr.y+pr.h/2)/TILE);
     if(isSolid(tileAt(tx,ty))||lobHitsTerrain(pr,prevY)){
-      if(pr.aoe) explodeTalisman(pr);
       pr.life=0;
       burst(pr.x+pr.w/2,pr.y+pr.h/2,'#c0c0d0',4,50,0.25);
       continue;
     }
-    if(pr.life<=0){ if(pr.aoe) explodeTalisman(pr); continue; }
+    if(pr.life<=0) continue;
     // 命中判定
     if(pr.team==='e'){
       if(!p.dead&&overlap(pr,p)){
@@ -1610,7 +1873,6 @@ function updateProjs(dt){
           damageEnemy(e,playerDmg(pr.dmg),Math.sign(pr.vx)*70);
           burst(pr.x,pr.y,'#f8d838',5,60,0.3);
           // 远程命中不加停顿：连续射击时停顿会被感知为卡顿
-          if(pr.aoe){ explodeTalisman(pr); }
           if(!pr.pierce) pr.life=0;
           break;
         }
@@ -1619,7 +1881,6 @@ function updateProjs(dt){
       if(b&&b.active&&!b.dying&&!b.gone&&pr.life>0&&overlap(pr,b)){
         damageEnemy(b,playerDmg(pr.dmg),0);
         burst(pr.x,pr.y,'#f8d838',5,60,0.3);
-        if(pr.aoe) explodeTalisman(pr);
         if(!pr.pierce) pr.life=0;
       }
     }
@@ -1641,30 +1902,6 @@ function updateProjs(dt){
   }
   for(let i=hazards.length-1;i>=0;i--) if(hazards[i].t>hazards[i].rise+hazards[i].dur+0.25) hazards.splice(i,1);
 }
-function explodeTalisman(pr){
-  if(pr.exploded) return;
-  pr.exploded=true; pr.life=0;
-  SFX.explode(); game.shake=Math.max(game.shake,3);
-  const cx=pr.x+pr.w/2, cy=pr.y+pr.h/2, r=pr.aoe||30;
-  burst(cx,cy,'#f08020',16,110,0.5);
-  burst(cx,cy,'#f8d838',10,80,0.4);
-  const hitOnce=e=>{ const d=dist(cx,cy,e.x+e.w/2,e.y+e.h/2); if(d<r+Math.max(e.w,e.h)/2){ damageEnemy(e,pr.dmg*playerDmg(1),Math.sign(e.x+e.w/2-cx)*80); } };
-  for(const e of level.enemies) if(!e.dying) hitOnce(e);
-  const b=level.boss;
-  if(b&&b.active&&!b.dying&&!b.gone){ const d=dist(cx,cy,b.x+b.w/2,b.y+b.h/2); if(d<r+16) damageEnemy(b,pr.dmg*playerDmg(1),0); }
-  // 主符爆炸后分裂出短寿命火矢；子弹不带 aoe，因此不会递归爆炸。
-  const count=pr.splitCount||0;
-  if(count){
-    const speed=pr.splitSpeed||145;
-    for(let i=0;i<count;i++){
-      const a=(Math.PI*2*i/count)+Math.PI/12;
-      game_projs.push({team:'p',x:cx-3,y:cy-3,w:6,h:6,
-        vx:Math.cos(a)*speed,vy:Math.sin(a)*speed,grav:0,dmg:1,life:1.05,
-        spr:'p_fire',face:Math.cos(a)>=0?1:-1,splitShot:true});
-    }
-  }
-}
-
 /* ============================================================
  * 主更新
  * ============================================================ */
@@ -1775,8 +2012,8 @@ function update(dt){
 
   if(hit('KeyP')){ game.settingsOpen=true; game.paused=true; SET_SEL=0; SFX.check(); return; }
   if(hit('KeyM')){ muted=!muted; toast(muted?'已静音':'声音开启','#c0c0d0'); }
-  updateSpeedSkill(dt);
-  if(hit('KeyL')) activateSpeedSkill();
+  updateDashSkill(dt);
+  if(hit('KeyL','ShiftLeft','ShiftRight')) activateDashSkill();
   if(hit('F9')&&game.mode==='coward'){
     game.god=!game.god; SET.god=game.god?1:-1; saveSet(); toast(game.god?'无敌模式 开':'无敌模式 关','#9a4fd8');
   }
@@ -1816,7 +2053,7 @@ function grantBuff(npc){
 function resetRun(){
   game.lives=3; game.deaths=0; game.playTime=0;
   player.maxHearts=3; player.hearts=3; player.shield=0;
-  player.skillCharge=SPEED_SKILL.max; player.skillT=0; player.skillCd=0;
+  player.dashT=0; player.dashCd=[0,0,0]; player.dashSlot=-1; player.aimX=player.face; player.aimY=0;
   player.weapons=['sword']; player.wi=0;
 }
 
@@ -2154,12 +2391,12 @@ function drawWorld(){
     const img=SPR[pr.spr];
     const fx=pr.vx<0?-1:1;
     const img2=fx<0?flipped(pr.spr):img;
-    if(pr.rot&&Math.abs(pr.vy)>Math.abs(pr.vx)){
-      // 竖直飞行的箭/飞剑：旋转贴图
+    if(pr.rot&&(pr.vx!==0||pr.vy!==0)){
+      // 非水平飞行的箭/飞剑：按实际速度方向旋转贴图
       CTX.save();
       CTX.translate(Math.round(pr.x+pr.w/2),Math.round(pr.y+pr.h/2));
-      CTX.rotate(pr.vy<0?-Math.PI/2:Math.PI/2);
-      CTX.drawImage(img2,-Math.round(pr.w/2),-Math.round(pr.h/2));
+      CTX.rotate(Math.atan2(pr.vy,pr.vx));
+      CTX.drawImage(img,-Math.round(pr.w/2),-Math.round(pr.h/2));
       CTX.restore();
     }else{
       CTX.drawImage(img2,Math.round(pr.x),Math.round(pr.y+(pr.grav?Math.sin(game.frame/3)*1:0)));
@@ -2183,6 +2420,8 @@ function drawWorld(){
     CTX.fillRect(Math.round(pa.x),Math.round(pa.y),s,s);
     if(s>=2){ CTX.fillRect(Math.round(pa.x)-1,Math.round(pa.y)+1,s+2,Math.max(1,s-2)); }
   }
+  // 独立预警层：始终显示在平台、Boss、角色和投射物之上，避免被平台盖住。
+  drawBossWarnings(level.boss);
   CTX.globalAlpha=1;
   CTX.restore();
 }
@@ -2329,26 +2568,32 @@ function drawBossHalo(b){
 
 // 雷电波：三层主干电弧 + 分叉小枝 + 前端亮头
 function drawLightningWave(pr){
-  const vert=pr.vx===0;
   const x0=pr.x, y0=pr.y, w=pr.w, h=pr.h;
   const cx=x0+w/2, cy=y0+h/2;
   const a=clamp(pr.life/0.4,0,1);
   const glow=0.5+0.5*Math.sin(game.frame/2.2);
+  const angle=Math.atan2(pr.vy,pr.vx);
+  const length=pr.dir==='diag'?30:32;
+  const breadth=pr.dir==='diag'?14:18;
+  const amp=breadth*0.34;
   CTX.globalAlpha=a;
+  CTX.save();
+  CTX.translate(cx,cy);
+  CTX.rotate(angle);
   // 外层辉光
   CTX.fillStyle='rgba(70,180,255,'+(0.18+0.12*glow).toFixed(2)+')';
-  CTX.beginPath(); CTX.ellipse(cx,cy,w*0.68,h*0.68,0,0,Math.PI*2); CTX.fill();
+  CTX.beginPath(); CTX.ellipse(0,0,length*0.58,breadth*0.72,0,0,Math.PI*2); CTX.fill();
   CTX.fillStyle='rgba(200,240,255,'+(0.14+0.12*glow).toFixed(2)+')';
-  CTX.beginPath(); CTX.ellipse(cx,cy,w*0.44,h*0.44,0,0,Math.PI*2); CTX.fill();
+  CTX.beginPath(); CTX.ellipse(0,0,length*0.42,breadth*0.45,0,0,Math.PI*2); CTX.fill();
   // 主干电弧：粗深蓝 → 中青 → 细白
-  const n=7, amp=(vert?w:h)*0.34;
+  const n=7;
   const bolt=(lw,col,fr)=>{
     CTX.strokeStyle=col; CTX.lineWidth=lw; CTX.beginPath();
     for(let i=0;i<=n;i++){
       const t=i/n, env=Math.sin(t*Math.PI);      // 两端收敛，中段狂野
       const off=Math.sin(pr.seed+i*2.3+game.frame*fr)*amp*env;
-      const px2=vert?cx+off:x0+w*t;
-      const py2=vert?y0+h*t:cy+off;
+      const px2=-length/2+length*t;
+      const py2=off;
       if(i===0) CTX.moveTo(px2,py2); else CTX.lineTo(px2,py2);
     }
     CTX.stroke();
@@ -2361,19 +2606,19 @@ function drawLightningWave(pr){
   for(const bt of [0.32,0.58,0.8]){
     const env=Math.sin(bt*Math.PI);
     const off=Math.sin(pr.seed+bt*n*2.3+game.frame*0.7)*amp*env;
-    const bx=vert?cx+off:x0+w*bt, by=vert?y0+h*bt:cy+off;
+    const bx=-length/2+length*bt, by=off;
     const dir=Math.sin(pr.seed+bt*31)>0?1:-1;
     CTX.beginPath(); CTX.moveTo(bx,by);
     for(let k=1;k<=3;k++){
       const s=k*3.4;
-      CTX.lineTo(vert?bx+dir*s:bx+dir*s*0.55, vert?by+dir*s*0.55:by+dir*s);
+      CTX.lineTo(bx+dir*s*0.55,by+dir*s);
     }
     CTX.stroke();
   }
   // 前端亮头
   CTX.fillStyle='rgba(255,255,255,'+(0.6+0.4*glow).toFixed(2)+')';
-  if(vert){ const ty=pr.vy>0?y0+h-5:y0; CTX.fillRect(cx-2,ty,4,5); }
-  else    { const tx=pr.face>0?x0+w-5:x0; CTX.fillRect(tx,cy-2,5,4); }
+  CTX.fillRect(length/2-5,-2,5,4);
+  CTX.restore();
   CTX.globalAlpha=1;
 }
 
@@ -2384,7 +2629,27 @@ function drawFlameWave(pr){
   const vert=pr.vx===0;                   // 竖直飞出的火焰波（上挥 / 下劈）
   const dir=pr.face>0?1:-1;
   CTX.globalAlpha=a;
-  if(vert){
+  if(pr.diag){
+    const cx=x0+w/2, cy=y0+h/2;
+    const angle=Math.atan2(pr.vy,pr.vx), length=28, breadth=14;
+    CTX.save();
+    CTX.translate(cx,cy);
+    CTX.rotate(angle);
+    CTX.fillStyle='rgba(255,130,30,0.2)';
+    CTX.beginPath(); CTX.ellipse(0,0,length*0.58,breadth*0.58,0,0,Math.PI*2); CTX.fill();
+    for(let i=0;i<5;i++){
+      const f=i/4;
+      const fx=-length/2+length*f;
+      const wob=Math.sin(game.frame*0.45+i*1.9);
+      const fh=breadth*(0.72+0.34*Math.sin(f*Math.PI))*(0.85+0.15*wob);
+      CTX.fillStyle=i<2?'#f8d838':(i<4?'#f08020':'#c83020');
+      CTX.beginPath(); CTX.ellipse(fx,-fh*0.08,fh*0.34,fh*0.5,0,0,Math.PI*2); CTX.fill();
+    }
+    CTX.fillStyle='rgba(255,255,225,'+(0.45+0.3*Math.sin(game.frame*0.7)).toFixed(2)+')';
+    CTX.beginPath(); CTX.ellipse(-length*0.24,-breadth*0.08,breadth*0.2,breadth*0.3,0,0,Math.PI*2); CTX.fill();
+    if(Math.random()<0.6) particles.push({x:cx+rand(-5,5),y:cy+rand(-5,5),vx:-pr.vx*0.12+rand(-20,20),vy:-pr.vy*0.12+rand(-20,20),life:0.3,maxLife:0.3,color:Math.random()<0.5?'#f8d838':'#f08020',size:1.4});
+    CTX.restore();
+  }else if(vert){
     const d=pr.vy>0?1:-1;                 // 1=向下, -1=向上
     const cx=x0+w/2, tail=d>0?y0:y0+h, tip=d>0?y0+h:y0;
     // 尾端辉光
@@ -2432,14 +2697,13 @@ function drawFlameWave(pr){
 
 // 各神兵的挥击辉光色（统一为「神器」质感）
 const WFX={sword:'255,236,180',flysword:'150,232,252',bow:'255,226,150',
-           talisman:'255,152,88',thunder:'168,238,255',flameblade:'255,148,56'};
+           thunder:'168,238,255',flameblade:'255,148,56'};
 const HOLD_POSE={
   sword:{handX:5,handY:11,rest:-0.62,scale:0.84},
   thunder:{handX:5,handY:11,rest:-0.58,scale:0.84},
   flameblade:{handX:5,handY:11,rest:-0.5,scale:0.84},
   bow:{handX:4,handY:10,rest:0.04,scale:0.9},
   flysword:{handX:3,handY:10,rest:-0.12,scale:0.82},
-  talisman:{handX:3,handY:10,rest:-0.16,scale:0.76},
 };
 function drawPlayer(){
   const p=player;
@@ -2454,6 +2718,21 @@ function drawPlayer(){
   let name='hero_idle';
   if(!p.onGround) name='hero_jump';
   else if(Math.abs(p.vx)>12) name=(Math.floor(p.anim)%2===0)?'hero_run1':'hero_run2';
+  if(p.dashT>0){
+    const ratio=clamp(p.dashT/DASH_SKILL.duration,0,1);
+    const cx=p.x+p.w/2, cy=p.y+p.h/2;
+    CTX.save();
+    CTX.lineCap='round';
+    for(let i=1;i<=3;i++){
+      CTX.strokeStyle='rgba(127,220,232,'+(0.25*ratio*(1-i*0.2)).toFixed(2)+')';
+      CTX.lineWidth=3-i*0.5;
+      CTX.beginPath();
+      CTX.moveTo(cx-p.face*(i*7+4),cy);
+      CTX.lineTo(cx-p.face*(i*7+13),cy);
+      CTX.stroke();
+    }
+    CTX.restore();
+  }
   drawSpr(name,p.x+p.w/2,p.y+p.h,p.face,0);
   // 持械层只取当前武器：近战握刃，远程保持弓、符或御剑手印姿势。
   const w=curWeapon(), img=SPR[HELD_SPR[w.id]||HELD_SPR.sword], pose=HOLD_POSE[w.id]||HOLD_POSE.sword;
@@ -2462,7 +2741,8 @@ function drawPlayer(){
     let ang=pose.rest+Math.sin(p.anim*0.35)*0.04;
     if(melee&&p.atkT>0){
       const prog=clamp(1-p.atkT/0.16,0,1);
-      ang=p.aim==='up'?-Math.PI*0.56:(p.aim==='down'?Math.PI*0.56:-2.15+prog*3.0);
+      if(p.aim==='diag') ang=p.aimY<0?Math.PI/4:Math.PI*3/4;
+      else ang=p.aim==='up'?-Math.PI*0.56:(p.aim==='down'?Math.PI*0.56:-2.15+prog*3.0);
     }
     CTX.save();
     CTX.translate(Math.round(p.x+p.w/2+p.face*pose.handX),Math.round(p.y+pose.handY));
@@ -2487,6 +2767,10 @@ function drawPlayer(){
     CTX.translate(Math.round(cx),Math.round(cy));
     if(p.aim==='up') CTX.rotate(-Math.PI/2);
     else if(p.aim==='down') CTX.rotate(Math.PI/2);
+    else if(p.aim==='diag'){
+      CTX.rotate(p.aimY<0?-Math.PI/4:Math.PI/4);
+      if(p.face<0) CTX.scale(-1,1);
+    }
     else if(p.face<0) CTX.scale(-1,1);
     const a0=-1.9+prog*1.5, a1=a0+1.7;
     const fc=WFX[w.id]||'255,255,255';
@@ -2557,14 +2841,20 @@ function drawHUD(){
   CTX.drawImage(SPR.ui_live,W-40,5);
   CTX.fillStyle='#f8f8f8'; CTX.font='bold 9px "Microsoft YaHei",sans-serif'; CTX.textAlign='left';
   CTX.fillText('×'+Math.max(0,game.lives),W-32,14);
-  // 神行技能条：满条按 L 加速 3 秒，冷却 6 秒后再次可用
-  const skillW=28, skillX=5, skillY=24, skillRatio=clamp(p.skillCharge/SPEED_SKILL.max,0,1);
-  CTX.fillStyle='rgba(8,8,18,0.78)'; CTX.fillRect(skillX-1,skillY-1,skillW+2,9);
-  CTX.fillStyle='#28243a'; CTX.fillRect(skillX,skillY,skillW,4);
-  CTX.fillStyle=p.skillT>0?'#7fdce8':(p.skillCd>0?'#9a4fd8':(skillRatio>=1?'#f8d838':'#c89820'));
-  CTX.fillRect(skillX,skillY,skillW*skillRatio,4);
-  const skillText=p.skillT>0?'L '+Math.ceil(p.skillT)+'s':p.skillCd>0?'冷却 '+Math.ceil(p.skillCd)+'s':skillRatio>=1?'L 可用':Math.floor(skillRatio*100)+'%';
-  txt(skillText,skillX+skillW/2,skillY+12,p.skillT>0?'#7fdce8':(skillRatio>=1&&p.skillCd<=0?'#f8d838':'#c0c0d0'),5,'center',true);
+  // 神行冲锋：L 或 Shift 自动使用任意一个已就绪的独立技能槽
+  const skillW=8, skillGap=2, skillX=5, skillY=24;
+  if(!Array.isArray(p.dashCd)) p.dashCd=[Math.max(0,p.dashCd||0),0,0];
+  while(p.dashCd.length<DASH_SKILL.slots) p.dashCd.push(0);
+  for(let i=0;i<DASH_SKILL.slots;i++){
+    const x=skillX+i*(skillW+skillGap), cd=p.dashCd[i]||0;
+    const ratio=clamp(1-cd/DASH_SKILL.cooldown,0,1);
+    const active=p.dashT>0&&p.dashSlot===i;
+    CTX.fillStyle='rgba(8,8,18,0.78)'; CTX.fillRect(x-1,skillY-1,skillW+2,9);
+    CTX.fillStyle='#28243a'; CTX.fillRect(x,skillY,skillW,4);
+    CTX.fillStyle=active?'#7fdce8':(cd>0?'#9a4fd8':'#f8d838');
+    CTX.fillRect(x,skillY,skillW*ratio,4);
+    txt(['L','⇧','+'][i],x+skillW/2,skillY+12,active?'#7fdce8':(cd<=0?'#f8d838':'#c0c0d0'),5,'center',true);
+  }
   // 无敌模式标识
   if(game.god){
     CTX.fillStyle='rgba(248,216,56,0.18)'; CTX.fillRect(W-56,20,52,11);
@@ -2722,23 +3012,6 @@ const WICON={
     "......yEk.w.....",
     ".......yEky.....",
     "........yy......",
-    "................"],
-  talisman:[
-    "................",
-    "...rrrrrrrrr....",
-    "...ryyyyyyyyr...",
-    "...ryyyyyyyyr...",
-    "...ryyyyyoyyr...",
-    "...ryyyyoyyyr...",
-    "...ryyyoyyyyr...",
-    "...ryyyyyoyyr...",
-    "...ryyyyoyyyr...",
-    "...ryyyoyyyyr...",
-    "...ryyyyyoyyr...",
-    "...ryyyyoyyyr...",
-    "...ryyyoyyyyr...",
-    "...ryyyyoyyyr...",
-    "...rrrrrrrrr....",
     "................"],
   thunder:[
     "................",
@@ -2929,7 +3202,7 @@ function drawTitle(){
   // 操作说明（底部半透明条）
   CTX.fillStyle='rgba(8,6,16,0.6)'; CTX.fillRect(0,252,W,18);
   CTX.fillStyle='rgba(200,200,215,0.9)'; CTX.font='8px "Microsoft YaHei",sans-serif';
-  CTX.fillText('←→ 移动  空格 跳跃  J 攻击  L 加速  E 交谈  Q 换武器  H 操作说明',W/2,262);
+  CTX.fillText('←→ 移动  空格 跳跃  J 攻击  L/Shift 冲锋  E 交谈  Q 换武器  H 操作说明',W/2,262);
 }
 
 function drawGameover(){

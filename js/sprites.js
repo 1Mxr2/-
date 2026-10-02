@@ -199,22 +199,6 @@ SPR.wpn_held_bow = spr([  // 射日神弓：金弦弯弓
 "............",
 "............",
 ]);
-SPR.wpn_held_talisman = spr([  // 九霄雷符：朱砂符纸
-"............",
-"...rrrrrr...",
-"...ryyyyr...",
-"...ryyoyr...",
-"...ryoyyr...",
-"...ryyoyr...",
-"...ryoyyr...",
-"...ryyoyr...",
-"...ryoyyr...",
-"...ryyoyr...",
-"...ryyyyr...",
-"...rrrrrr...",
-"....tttt....",
-"............",
-]);
 SPR.wpn_held_thunder = spr([  // 雷霆之刃：锯齿电刃
 "............",
 "......yy....",
@@ -251,7 +235,7 @@ SPR.wpn_held_flameblade = spr([  // 炎狱双刃：双焰弯刀
 SPR.hand_sword = SPR.wpn_held_sword;
 // 武器 id -> 手持精灵名
 const HELD_SPR={sword:'wpn_held_sword',flysword:'wpn_held_flysword',bow:'wpn_held_bow',
-                talisman:'wpn_held_talisman',thunder:'wpn_held_thunder',flameblade:'wpn_held_flameblade'};
+                thunder:'wpn_held_thunder',flameblade:'wpn_held_flameblade'};
 
 /* ================= 投射物 ================= */
 SPR.p_fire = spr([
@@ -281,16 +265,6 @@ SPR.p_flysword = spr([
 "....sssssss.",
 "cSSSSSSSSke..",
 "....sssssss.",
-]);
-SPR.p_talisman = spr([
-"rrrrrrrr",
-"ryyyyyyr",
-"rykkkkyr",
-"rykyykyr",
-"rykkkkyr",
-"ryyyyyyr",
-"rrrrrrrr",
-"........",
 ]);
 SPR.p_ink = spr([
 "........",
