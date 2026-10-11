@@ -190,12 +190,12 @@ function drawSettingsPanel(closeHint){
 const HELP_ROWS=[
   ['← →  /  A D','左右移动'],
   ['空格','跳跃（疾风加护时可二段跳，长按跳更高）'],
-  ['J  /  Z','挥击 / 射击（可斩落敌方弹幕）'],
+  ['J  /  Z','挥击 / 射击（仅初始青铜剑能挡敌方弹幕）'],
   ['按住 ↑  /  W','向上攻击 · 向上射击'],
   ['空中按住 ↓ / S','向下攻击 · 向下射击'],
   ['Q  /  1 - 5','切换已获得的神兵'],
   ['E','与神仙妖怪交谈，领取加护'],
-  ['L / Shift','神行闪避：方向键定向，3 次充能，各 4.5 秒'],
+  ['L / Shift','3次神行，各4.5秒；大红圈须连续冲出'],
   ['P  /  Esc','暂停 · 打开设置'],
   ['M','静音开关'],
   ['F8  /  F9','跳关 · 无敌（调试用）'],
@@ -255,7 +255,7 @@ function txt(s,x,y,color,size,align,bold){
 }
 let level=null;
 const cam={x:0, y:0};
-let particles=[], toasts=[], hazards=[]; // hazards: 火柱/墨柱
+let particles=[], toasts=[], hazards=[]; // hazards: 柱阵 / 覆场爆发
 
 /* ---------------- 玩家 ---------------- */
 const player={
@@ -714,8 +714,8 @@ function doAttack(){
 }
 
 function meleeHits(){
-  const w=player.attackWeapon||curWeapon(); if(w.kind!=='melee') return;
-  const p=player;
+  const w=player.attackWeapon||curWeapon(),p=player;
+  if(p.dead||p.atkT<=0||w.kind!=='melee') return;
   let box;
   if(p.aim==='diag') box={x:p.aimX>0?p.x+p.w-2:p.x-w.range+2,y:p.aimY<0?p.y-w.range:p.y+p.h,w:w.range,h:w.range};
   else if(p.aim==='up') box={x:p.x-6,y:p.y-24,w:p.w+12,h:24};
@@ -724,9 +724,10 @@ function meleeHits(){
   for(const e of level.enemies) tryMeleeHit(e,box);
   const b=level.boss;
   if(b&&!b.dying&&!b.gone) tryMeleeHit(b,box);
-  // 剑击可击碎敌方弹幕
+  // 按本次挥砍开始时的武器判定：只有初始青铜剑能击碎敌方弹幕。
+  if(w.id!=='sword') return;
   for(const pr of game_projs){
-    if(pr.team==='e'&&!pr.pillar&&overlap(box,pr)&&!p.swingHit.has(pr)){
+    if(pr.team==='e'&&pr.life>0&&!pr.pillar&&overlap(box,pr)&&!p.swingHit.has(pr)){
       p.swingHit.add(pr); pr.life=0; burst(pr.x+pr.w/2,pr.y+pr.h/2,'#c0c0d0',4,60,0.25);
     }
   }
@@ -809,7 +810,9 @@ function afterDeath(){
   p.dashT=0; p.dashCd=[0,0,0]; p.dashSlot=-1; p.aimX=p.face; p.aimY=0;
   p.x=p.spawn.x; p.y=p.spawn.y; p.vx=0; p.vy=0;
   game_projs.length=0; hazards.length=0;
-  if(level.boss&&level.boss.active&&!level.boss.dying&&!level.boss.gone) recoverBoss(level.boss,1.5);
+  if(level.boss&&level.boss.active&&!level.boss.dying&&!level.boss.gone){
+    recoverBoss(level.boss,1.5);resetBossOverload(level.boss);
+  }
   game.state='play'; game.stateT=0;
 }
 
@@ -1119,6 +1122,7 @@ function damageEnemy(e,n,kx){
   if(e.boss&&e.bars>1&&e.hp<=0&&e.bar<e.bars){
     e.bar++; e.hp=e.maxhp; e.phase=e.bar; e.skillBag=[];
     recoverBoss(e,1.5);
+    resetBossOverload(e);
     for(let i=game_projs.length-1;i>=0;i--) if(game_projs[i].team==='e') game_projs.splice(i,1);
     hazards.length=0;
     SFX.roar(); game.shake=9; game.bossBannerT=1.6;
@@ -1142,6 +1146,7 @@ function activateBoss(b){
   if(b.active||b.dying||b.gone) return;
   b.active=true; level.bossActive=true; b.cd=1.4;
   b.arena=bossArena(b); b.hoverSide=Math.sign(b.x+b.w/2-player.x)||1;
+  resetBossOverload(b);
   b.spawnT=0.55;                     // 苏醒演出：弹起 + 光晕
   SFX.roar(); game.shake=6; game.bossBannerT=1.9;
   toast('「'+b.name+'」现身！','#d84040');
@@ -1177,8 +1182,8 @@ function hoverBoss(b,dt){
   b.hoverSide=side;
   const tx=clamp(px+side*spacing+Math.sin(b.t*1.4)*10-b.w/2,a.left,a.right-b.w);
   const ty=bossHoverY(b);
-  const blend=1-Math.exp(-7*dt);
-  b.vx=lerp(b.vx,clamp((tx-b.x)*2.2,-68,68),blend);
+  const blend=1-Math.exp(-10*dt),speed=BOSS_PACE[b.btype].move+8*(b.phase-1);
+  b.vx=lerp(b.vx,clamp((tx-b.x)*3.8,-speed,speed),blend);
   const lift=BOSS_PACE[b.btype].lift;
   b.vy=lerp(b.vy,clamp((ty-b.y)*(4.5+(lift-100)/32),-lift,72),blend);
   b.x+=b.vx*dt; b.y+=b.vy*dt; b.face=Math.sign(px-cx)||b.face;
@@ -1186,20 +1191,75 @@ function hoverBoss(b,dt){
 function recoverBoss(b,duration){
   b.state='recover'; b.stT=duration||1.1; b.cd=0.55;
   delete b.patternStep; delete b.patternWaves;
+  delete b.overloadZone;
   b.vx=0; b.vy=0; b.warningKey=''; b.warningPoints=null; b.warningTarget=null;
   constrainBoss(b);
 }
 function finishBossSkill(b){
   recoverBoss(b,Math.max(0.76,BOSS_PACE[b.btype].recover-0.04*(b.phase-1)));
 }
-function beginBossSkill(b){
-  const moves=BOSS_MOVES[b.btype].filter(m=>b.phase>=(m[4]||1)&&b.phase<=(m[5]||3));
-  if(!b.skillBag||!b.skillBag.length){
-    b.skillBag=moves.slice();
-    for(let i=b.skillBag.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [b.skillBag[i],b.skillBag[j]]=[b.skillBag[j],b.skillBag[i]]; }
-    if(b.skillBag.length>1&&b.skillBag[b.skillBag.length-1][0]===b.lastSkill) [b.skillBag[0],b.skillBag[b.skillBag.length-1]]=[b.skillBag[b.skillBag.length-1],b.skillBag[0]];
+function resetBossOverload(b){
+  b.overloadPhase=b.phase;b.overloadCount=0;b.overloadGap=2;
+  b.overloadCd=b.phase>=2?0:8;
+}
+function canBossOverload(b){
+  if(!BOSS_OVERLOADS[b.btype])return false;
+  const px=player.x+player.w/2,a=b.arena;
+  const ready=player.dashCd.filter(cd=>cd<=0).length;
+  return (b.phase>=2||b.overloadCd<=0)&&!player.dead&&px>=a.left+12&&px<=a.right-12&&ready>=(player.fx.speed?3:2);
+}
+function prepareBossOverload(b){
+  const cfg=BOSS_OVERLOADS[b.btype],a=b.arena,px=player.x+player.w/2;
+  // 第二至五关的新招统一缩到原来的 80%，预警圈与命中范围同步缩小。
+  const radius=Math.min(cfg.radius+8*(b.phase-1),(a.right-a.left)/2-20)*0.8;
+  // 按增益/减速实际剩余时间计算，防止蓄力中减速结束后仅靠跑动脱离。
+  const speedT=Math.max(0,player.fx.speed?.t||0),slowT=Math.max(0,player.fx.slow?.t||0);
+  let walkBudget=radius-cfg.margin,windup=0;
+  for(const expiry of [speedT,slowT,Infinity].filter(t=>t>0).sort((x,y)=>x-y)){
+    const speed=95*(windup<speedT?1.5:1)*(windup<slowT?0.55:1);
+    const step=Math.min(expiry-windup,walkBudget/speed);
+    windup+=step;walkBudget-=step*speed;
+    if(walkBudget<0.001)break;
   }
-  const move=b.skillBag.pop();
+  b.stT=Math.max(0.9,windup);b.castDuration=b.stT;
+  b.overloadZone={left:px-radius,right:px+radius,floor:a.floor,
+    dir:px-a.left<a.right-px?1:-1,color:cfg.color,btype:b.btype};
+  b.skillHint='不可挡 / 跳跃无效：L / Shift 连续神行'+(b.overloadZone.dir>0?' →':' ←');
+  b.overloadCd=b.phase>=2?0:cfg.cooldown;
+  // 覆场蓄力期间留出纯粹的逃生路线，避免旧弹幕与召唤物堵住出口。
+  for(let i=game_projs.length-1;i>=0;i--)if(game_projs[i].team==='e')game_projs.splice(i,1);
+  hazards.length=0;
+  for(const e of level.enemies){
+    if(!e.dying){e.stunT=Math.max(e.stunT||0,b.stT+0.85);e.vx=0;e.vy=0;}
+  }
+}
+function beginBossSkill(b,forcedName){
+  if(b.overloadPhase!==b.phase)resetBossOverload(b);
+  const moves=BOSS_MOVES[b.btype].filter(m=>b.phase>=(m[4]||1)&&b.phase<=(m[5]||3));
+  const available=m=>m[0]!=='overloadPre'||canBossOverload(b);
+  // 指定招式用于单招调试；仍遵守阶段解锁、冷却和神行储量。
+  let move=forcedName?moves.find(m=>m[0]===forcedName&&available(m)):null;
+  if(!move&&b.phase>=2&&b.overloadCount>=b.overloadGap&&canBossOverload(b)){
+    move=moves.find(m=>m[0]==='overloadPre');
+  }
+  if(!move){
+    // 后阶段的大圈单独按招数调度，不占普通招式的洗牌位置。
+    const pool=b.phase>=2?moves.filter(m=>m[0]!=='overloadPre'):moves;
+    if(b.phase>=2&&b.skillBag)b.skillBag=b.skillBag.filter(m=>m[0]!=='overloadPre');
+    if(!b.skillBag||!b.skillBag.some(available)){
+      b.skillBag=pool.slice();
+      for(let i=b.skillBag.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [b.skillBag[i],b.skillBag[j]]=[b.skillBag[j],b.skillBag[i]]; }
+      if(b.skillBag.length>1&&b.skillBag[b.skillBag.length-1][0]===b.lastSkill) [b.skillBag[0],b.skillBag[b.skillBag.length-1]]=[b.skillBag[b.skillBag.length-1],b.skillBag[0]];
+    }
+    let index=b.skillBag.findLastIndex(m=>available(m)&&m[0]!==b.lastSkill);
+    if(index<0)index=b.skillBag.findLastIndex(available);
+    move=b.skillBag.splice(index,1)[0];
+  }
+  if(b.phase>=2){
+    if(move[0]==='overloadPre'){
+      b.overloadCount=0;b.overloadGap=b.overloadGap===2?3:2;
+    }else b.overloadCount++;
+  }
   b.state=move[0]; b.stT=Math.max(0.7,move[1]*BOSS_PACE[b.btype].windup-0.02*(b.phase-1)); b.castDuration=b.stT; b.skillName=move[2]; b.skillHint=move[3];
   const pattern=BOSS_PATTERNS[b.state];
   if(pattern){
@@ -1207,6 +1267,8 @@ function beginBossSkill(b){
   }else{ delete b.patternStep; delete b.patternWaves; }
   b.lastSkill=b.state; b.vx=0; b.vy=0; b.cd=0; b.trailT=0;
   b.warningKey=''; b.warningTarget=null; b.warningPoints=null;
+  delete b.overloadZone;
+  if(b.state==='overloadPre')prepareBossOverload(b);
   b.face=Math.sign(player.x+player.w/2-b.x-b.w/2)||b.face;
   bossWarningPoints(b);
 }
@@ -1303,13 +1365,24 @@ function updateBossPattern(b,dt){
  * ============================================================ */
 function updateBoss(b,dt){
   const p=player;
+  if(b.gone)return;
   if(b.dying){ b.deadT-=dt; if(b.deadT<=0) bossDie(b); return; }
   if(!b.active){
     if(Math.abs(p.x-b.x)<170) activateBoss(b);
     return;
   }
+  b.overloadCd=Math.max(0,(b.overloadCd||0)-dt);
   if(b.flash>0) b.flash=Math.max(0,b.flash-dt);
   if(b.spawnT>0) b.spawnT=Math.max(0,b.spawnT-dt);
+  if(b.state==='overloadPre'){
+    b.stT-=dt;b.t+=dt;bossWarningPoints(b);
+    if(b.stT<=0){
+      hazards.push({...b.overloadZone,overload:true,t:0,dur:0.65});
+      SFX.explode();game.shake=Math.max(game.shake,5);
+      recoverBoss(b,Math.max(1.05,BOSS_PACE[b.btype].recover));
+    }
+    return;
+  }
   if(BOSS_PATTERNS[b.state]){ updateBossPattern(b,dt); return; }
   if(b.state==='recover'){
     b.stT-=dt;
@@ -1343,7 +1416,7 @@ function updateBoss(b,dt){
   b.t+=dt; b.cd=(b.cd||0)-dt; b.stT-=dt;
   const pcx=p.x+p.w/2, pcy=p.y+p.h/2, bcx=b.x+b.w/2, bcy=b.y+b.h/2;
   const wasBossAttack=BOSS_ATK.has(b.state);
-  if(b.bars===1&&b.hp<b.maxhp*0.45&&b.phase===1){ b.phase=2; b.stT=0.8; b.state='rage'; game.shake=8; SFX.roar(); burst(bcx,bcy,'#f8d838',24,120,0.8); toast(b.name+' 暴怒了！','#d84040'); }
+  if(b.bars===1&&b.hp<b.maxhp*0.45&&b.phase===1){ b.phase=2; resetBossOverload(b); b.stT=0.8; b.state='rage'; game.shake=8; SFX.roar(); burst(bcx,bcy,'#f8d838',24,120,0.8); toast(b.name+' 暴怒了！','#d84040'); }
   if(b.state==='rage'&&b.stT<=0) b.state='idle';
 
   // 掉出世界救援：送回竞技场出生点，不掉血
@@ -1761,6 +1834,7 @@ function updateBoss(b,dt){
 const BOSS_ATK=new Set(['faultPre','weavePre','sealPre','furnacePre','riftPre','teleportDashPre','inkcross','summon','summonPre','tele','volley','rainPre','rain','roar','swoopPre','swoop','venomPre','webrPre','blinkPre','dashPre','dash','inkcross','inkfan','pillarPre','summon','summonPre','slamPre','hurlPre','meteorPre','infernoPre','fanPre','nova','tpOut','divePre','dive','rage','charge','ringPre','triplePre','poisonPre','webPre','inkRainPre','orbPre']);
 const BOSS_WARN_STATES=new Set(['faultPre','weavePre','sealPre','furnacePre','riftPre','teleportDashPre','inkcross','summon','summonPre','tele','volley','rainPre','rain','roar','swoopPre','venomPre','webrPre','blinkPre','inkfan','pillarPre','slamPre','dashPre','hurlPre','meteorPre','infernoPre','fanPre','nova','tpOut','divePre','ringPre','triplePre','poisonPre','webPre','inkRainPre','orbPre']);
 for(const state of Object.keys(BOSS_PATTERNS)){ BOSS_ATK.add(state); BOSS_WARN_STATES.add(state); }
+BOSS_ATK.add('overloadPre');BOSS_WARN_STATES.add('overloadPre');
 
 function warningSurfaceY(px,fromY){
   return groundTop(px,fromY)+1;
@@ -1797,7 +1871,10 @@ function bossWarningPoints(b){
   const dashRx=b.w/2+player.w/2, dashRy=Math.max(8,b.h/2);
 
   const pattern=BOSS_PATTERNS[state];
-  if(pattern){
+  if(state==='overloadPre'){
+    const zone=b.overloadZone;
+    add((zone.left+zone.right)/2,zone.floor,(zone.right-zone.left)/2,2.4);
+  }else if(pattern){
     if(pattern.offsets){
       const shift=(b.patternStep%2?pattern.shift:0);
       for(const offset of pattern.offsets)addGround(playerX+offset+shift,pattern.width?pattern.width/2:6,2.4);
@@ -1907,9 +1984,60 @@ function drawBossWarnings(b){
   CTX.restore();
 }
 
+// 密集落雨与像素刺阵共用一个覆场伤害区，视觉不会飞到圈外或残留攻击。
+function drawOverloadBurst(zone){
+  const cfg=BOSS_OVERLOADS[zone.btype],width=zone.right-zone.left;
+  const cx=(zone.left+zone.right)/2,rx=width/2,t=zone.t;
+  const alpha=CTX.globalAlpha,top=Math.min(16,zone.floor-184),rainHeight=zone.floor-top;
+  CTX.save();
+  CTX.beginPath();CTX.rect(zone.left,-H,width,zone.floor+H+7);CTX.clip();
+  // 从爆发第一帧起覆盖高空：三层落弹一直循环到危险区消退。
+  const columns=Math.ceil(width/18);
+  for(let i=0;i<columns;i++)for(let row=0;row<3;row++){
+    const x=Math.round(zone.left+(i+0.5)*width/columns+Math.sin(i*2.7+row)*3);
+    const progress=(t*2.5+row/3+(i%4)*0.075)%1;
+    const y=Math.round(top+progress*rainHeight);
+    CTX.globalAlpha=alpha*0.4;CTX.fillStyle=cfg.color;
+    CTX.fillRect(x-1,y-24,2,18);CTX.fillRect(x-3,y-15,1,8);
+    CTX.globalAlpha=alpha;
+    const spr=zone.btype==='chaos'&&(i+row)%2?'p_ink':cfg.spr,img=SPR[spr];
+    CTX.drawImage(img,Math.round(x-img.width/2),Math.round(y-img.height/2));
+    if(zone.btype==='judge'){
+      CTX.fillStyle=cfg.core;CTX.fillRect(x,y-6,1,10);
+    }
+  }
+  // 地面没有可站的缝：刺阵与落地炸点铺满同一条红圈范围。
+  const spikes=Math.ceil(width/13),rise=Math.min(1,0.6+t/0.08);
+  for(let i=0;i<spikes;i++){
+    const x=Math.round(zone.left+(i+0.5)*width/spikes);
+    const pulse=0.82+0.18*Math.sin(t*25+i*1.9);
+    const height=Math.round((zone.btype==='flame'?52:zone.btype==='judge'?43:36)*pulse*rise);
+    const halfWidth=zone.btype==='flame'?7:6;
+    for(let yy=0;yy<height;yy+=3){
+      const half=Math.max(1,Math.round(halfWidth*(1-yy/height)));
+      const lean=zone.btype==='flame'?Math.round(Math.sin(yy*0.21+t*22+i)*2):Math.round(yy/height*(i%2?2:-2));
+      const sx=x+lean-half,sy=zone.floor-yy-3;
+      CTX.fillStyle=cfg.dark;CTX.fillRect(sx,sy,half*2,3);
+      CTX.fillStyle=cfg.color;CTX.fillRect(sx+1,sy,Math.max(1,half*2-2),3);
+      CTX.fillStyle=cfg.core;CTX.fillRect(x+lean,sy,1,3);
+    }
+    const flash=(t*8+i*0.31)%1,reach=Math.round(3+flash*7);
+    CTX.globalAlpha=alpha*(1-flash)*0.8;CTX.fillStyle=cfg.core;
+    CTX.fillRect(x-reach,zone.floor-2,reach*2,2);
+    CTX.fillRect(x-1,zone.floor-8-flash*14,2,5);
+    CTX.globalAlpha=alpha;
+  }
+  CTX.strokeStyle=zone.color;CTX.lineWidth=1;
+  for(let i=0;i<3;i++){
+    CTX.beginPath();CTX.ellipse(cx,zone.floor,rx-i*3,2.4+i,0,0,Math.PI*2);CTX.stroke();
+  }
+  CTX.restore();
+}
+
 function bossDie(b){
   b.dying=false; b.gone=true;
   delete b.patternStep; delete b.patternWaves;
+  delete b.overloadZone;
   level.bossActive=false; level.bossDead=true;
   if(level.gate){ level.gate.open=true; }
   for(let i=game_projs.length-1;i>=0;i--) if(game_projs[i].team==='e') game_projs.splice(i,1);
@@ -1999,6 +2127,13 @@ function updateProjs(dt){
 
   // 火柱
   for(const hz of hazards){
+    if(hz.overload){
+      hz.t+=dt;
+      if(hz.t<=hz.dur&&!p.dead&&overlap(p,{x:hz.left,y:-H,w:hz.right-hz.left,h:hz.floor+H})){
+        hurtPlayer(1,{noKnock:true});
+      }
+      continue;
+    }
     if(hz.delay>0){ hz.delay=Math.max(0,hz.delay-dt); continue; }
     hz.t+=dt;
     if(hz.t<hz.rise) hz.h=hz.maxH*(hz.t/hz.rise);
@@ -2011,7 +2146,10 @@ function updateProjs(dt){
       particles.push({x:hz.x+rand(-4,4),y:hz.y-rand(0,hz.h),vx:rand(-8,8),vy:-70,life:0.3,maxLife:0.3,color:ink?(Math.random()<0.5?'#9a4fd8':'#5a2a8c'):(Math.random()<0.5?'#f08020':'#f8d838'),size:2});
     }
   }
-  for(let i=hazards.length-1;i>=0;i--) if(hazards[i].t>hazards[i].rise+hazards[i].dur+0.25) hazards.splice(i,1);
+  for(let i=hazards.length-1;i>=0;i--){
+    const hz=hazards[i],end=hz.overload?hz.dur+0.18:hz.rise+hz.dur+0.25;
+    if(hz.t>end)hazards.splice(i,1);
+  }
 }
 /* ============================================================
  * 主更新
@@ -2525,6 +2663,10 @@ function drawWorld(){
   }
   // 火柱 / 墨柱
   for(const hz of hazards){
+    if(hz.overload){
+      CTX.save();CTX.globalAlpha=hz.t>hz.dur?clamp(1-(hz.t-hz.dur)/0.18,0,1):1;
+      drawOverloadBurst(hz);CTX.restore();continue;
+    }
     if(hz.delay>0){
       CTX.fillStyle='#ff6868'; CTX.fillRect(hz.x-hz.w/2,hz.y-2,hz.w,2);
     }
@@ -3027,6 +3169,8 @@ function drawHUD(){
       CTX.fillStyle='rgba(8,8,18,0.82)'; CTX.fillRect(W/2-158,35,316,23);
       txt(label,W/2,46,'#ffe8a0',8,'center',true);
       CTX.fillStyle='#ff6868'; CTX.fillRect(W/2-90,51,180*(1-clamp(b.stT/(b.castDuration||1),0,1)),2);
+    }else if(hazards.some(h=>h.overload&&h.t<=h.dur)){
+      txt('爆发中！先留在红圈外',W/2,45,'#ffe8a0',9,'center',true);
     }else if(b.state==='recover'){
       txt('破绽！趁现在反击',W/2,45,'#7fdce8',9,'center',true);
     }

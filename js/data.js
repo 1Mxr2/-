@@ -28,7 +28,7 @@ function buildMap(w,h,fn){
 // 每关的两条命包含正在使用的一条；回血道具不增加上限。
 const PLAYER_RULES={lives:2,hearts:3,hurtGrace:1.25,respawnGrace:2};
 
-// ---------- 武器：近战输出更高，远程以射程/穿透换取安全 ----------
+// ---------- 武器：只有初始青铜剑可斩落弹幕，元素刀以特效/伤害换取输出 ----------
 const WEAPONS=[
   {id:'sword',     name:'青铜剑',   slot:1, cd:0.36, kind:'melee', dmg:3, range:28},
   {id:'flysword',  name:'飞剑',     slot:2, cd:0.52, kind:'proj',  dmg:2, speed:255, pierce:2, life:0.95, spr:'p_flysword', pw:12, ph:4},
@@ -63,11 +63,11 @@ const BOSSES={
 
 // 越靠后的关卡，反击窗口/空闲间隔越短；升空更快，但蓄力始终可读。
 const BOSS_PACE={
-  garg:  {recover:1.08,gap:0.46,windup:0.98,lift:100},
-  spider:{recover:1.02,gap:0.39,windup:0.95,lift:116},
-  judge: {recover:0.96,gap:0.32,windup:0.92,lift:132},
-  flame: {recover:0.90,gap:0.25,windup:0.89,lift:148},
-  chaos: {recover:0.84,gap:0.18,windup:0.86,lift:164},
+  garg:  {recover:1.08,gap:0.46,windup:0.98,lift:100,move:110},
+  spider:{recover:1.02,gap:0.39,windup:0.95,lift:116,move:120},
+  judge: {recover:0.96,gap:0.32,windup:0.92,lift:132,move:130},
+  flame: {recover:0.90,gap:0.25,windup:0.89,lift:148,move:140},
+  chaos: {recover:0.84,gap:0.18,windup:0.86,lift:164,move:152},
 };
 
 // 技能池按阶段解锁；每轮洗牌、不连续重复。数值是蓄力秒数。
@@ -97,6 +97,23 @@ BOSS_MOVES.spider.push(['webSpiralPre',0.9,'回旋蛛网','多轮网环：从间
 BOSS_MOVES.judge.push(['verdictPre',0.92,'三重追判','连续三判：红圈锁定后移动'],['inkCagePre',1.0,'墨牢合围','墨柱交错：走进柱间空隙',2]);
 BOSS_MOVES.flame.push(['eruptionPre',0.95,'焚地连爆','连续地火：观察红圈再换位'],['cinderRainPre',1.0,'交错火雨','火雨三轮：闪避或挥剑挡弹',2]);
 BOSS_MOVES.chaos.push(['starfallPre',0.98,'星陨连锁','落星夹击：移位并斩落光弹'],['eclipsePre',1.0,'阴阳双轮','旋转弹环：穿过缺口或神行',2]);
+
+// 全高度覆场招式：一阶段偶发，二阶段起每隔两、三招交替施放。
+const BOSS_OVERLOADS={
+  spider:{name:'万毒封场',radius:166,margin:34,cooldown:21,color:'#7cd870',dark:'#275632',core:'#d7ffac',spr:'p_poison'},
+  judge: {name:'墨狱天罚',radius:172,margin:38,cooldown:20,color:'#bc86ed',dark:'#422458',core:'#ecdbff',spr:'p_ink'},
+  flame: {name:'焚界爆发',radius:178,margin:42,cooldown:19,color:'#ffac52',dark:'#ae382c',core:'#fff4b2',spr:'p_fire'},
+  chaos: {name:'混沌灭界',radius:194,margin:46,cooldown:18,color:'#ffe19a',dark:'#685493',core:'#fffbed',spr:'p_light'},
+};
+for(const [type,cfg] of Object.entries(BOSS_OVERLOADS)){
+  BOSS_MOVES[type].push(['overloadPre',1.4,cfg.name,'不可挡 / 跳跃无效：连续神行离开红圈']);
+}
+for(const moves of Object.values(BOSS_MOVES)){
+  for(const move of moves){
+    move[3]=move[3].replace(/挥剑挡弹/g,'青铜剑挡弹').replace(/挥剑挡墨/g,'青铜剑挡墨');
+    if(move[0]==='starfallPre')move[3]='落星夹击：移位或用青铜剑挡光弹';
+  }
+}
 
 // ---------- 友方神仙 / 妖怪 ----------
 const NPC_TYPES={
